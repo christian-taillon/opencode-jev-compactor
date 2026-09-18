@@ -16,21 +16,19 @@
         "enabled": true,
         "model": "jev-latest",
 
-        "keepThreshold": 0.45,
-        "exactEvidenceThreshold": 0.45,
-        "discardThreshold": 0.80,
-        "supersededThreshold": 0.75,
+        "keepThreshold": 0.50,
+        "verificationThreshold": 0.80,
         "uncertaintyMargin": 0.12,
-        "minConfidence": 0.55,
 
         "preserveRecentMessages": 6,
         "minReductionRatio": 0.15,
 
-        "toolResultPreviewChars": 8000,
+        "toolResultPreviewChars": 300,
+        "verificationResultPreviewChars": 8000,
         "truncateHeadChars": 600,
-        "maxStateChars": 110000,
-        "maxStateTokens": 28000,
-        "maxRequestTokens": 60000,
+        "maxStateChars": 100000,
+        "maxStateTokens": 24000,
+        "maxRequestTokens": 30000,
         "timeoutMs": 6000,
 
         "enableCompareTool": true,
