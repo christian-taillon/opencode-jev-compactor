@@ -7,6 +7,25 @@
 - Made `/jev-status` easier to read with an extra-large dialog, one detailed latest run, and compact previous-run summaries.
 - Documented the 0.0.3 `state-cannot-fit` fallback for transcripts that exceed the single fitted Jev-state ceiling.
 
+## 0.0.5
+
+Simplified Jev compaction architecture informed by practical tool-pruning patterns.
+
+- Replaced separate Jev text/tool/file/constraint scoring surfaces with a chronological conversation projection.
+- Reduced the normal tool decision pass from roughly ten judgments per tool to two independent Noul questions: keep call provenance and keep full result.
+- Added a second destructive-action verification pass for every proposed truncate/drop, using richer candidate evidence and a high verification threshold.
+- Changed the default policy to preserve all user and assistant text verbatim; Jev now focuses on high-volume tool traces.
+- Reduced first-pass tool-result previews from 8,000 characters to 300 characters by default while retaining up to 8,000 characters only for targeted verification.
+- Added aggressive Jev-only state fitting: staged input truncation, old-text abridgement/collapse, compact one-line tool traces, removal of old call-less state entries, and merging of adjacent call-only entries.
+- Tightened the shared request budget to 30,000 estimated tokens and state budget to 24,000.
+- Replaced serialized JSON-to-Markdown reduction as the acceptance metric with semantic payload reduction over conversational text, tool inputs, tool results, and attachment descriptors.
+- Kept serialized reduction as diagnostics only.
+- Added per-tool decision diagnostics including keep-call, keep-result, verification probability, and final action.
+- Added session ID and plugin version to compaction run metrics.
+- Record `preexisting-compaction-result` when another plugin instance or compaction handler has already populated `event.result`, instead of silently returning.
+- Updated the regression suite for ordered state, two-pass verification, text preservation, semantic payload accounting, and richer observability.
+- Candidate-state chunking remains out of scope until the stronger fitting pipeline is validated on real long sessions.
+
 ## 0.0.4
 
 False-positive compaction quality correction.

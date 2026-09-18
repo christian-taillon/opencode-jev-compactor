@@ -1,13 +1,19 @@
-import type { CompactionOutcome, CompactionStats, JsonValue } from "../domain/types.js"
+import type {
+  CompactionOutcome,
+  CompactionStats,
+  JsonValue,
+  ToolDecisionDiagnostic,
+} from "../domain/types.js"
 import { batchQuestions } from "../jev/batch.js"
-import { buildQuestionPlan } from "../jev/questions.js"
+import { buildQuestionPlan, verificationQuestion } from "../jev/questions.js"
 import type { JevAnswer, JevBatchResult, JevQuestion } from "../jev/types.js"
 import type { PluginOptions } from "../plugin/options.js"
 import { composeDecisions } from "../policy/compose.js"
-import { reductionGate } from "../policy/reduction.js"
-import { buildJevState } from "../state/build.js"
+import { reductionGate, semanticPayloadReduction } from "../policy/reduction.js"
+import { buildJevState, type JevState } from "../state/build.js"
 import { estimateJsonTokens, estimateTokens } from "../state/estimate.js"
 import { fitState } from "../state/fit.js"
+import { redactSecrets } from "../state/redact.js"
 import { assembleCheckpoint } from "../transcript/checkpoint.js"
 import { normalizeOpenCodeMessages } from "../transcript/normalize.js"
 
@@ -15,16 +21,24 @@ export interface JevAsker {
   ask(state: JsonValue, questions: Record<string, JevQuestion>, signal?: AbortSignal): Promise<JevBatchResult>
 }
 
-export function initialCompactionStats(rawMessages: readonly unknown[]): CompactionStats {
+const PLUGIN_VERSION = "0.0.5"
+
+export function initialCompactionStats(rawMessages: readonly unknown[], sessionID?: string): CompactionStats {
   return {
+    ...(sessionID ? { sessionID } : {}),
+    pluginVersion: PLUGIN_VERSION,
     originalEstimatedTokens: estimateJsonTokens(rawMessages),
     checkpointEstimatedTokens: 0,
     removedFraction: 0,
     remainingRatio: 1,
+    semanticPayloadCharsBefore: 0,
+    semanticPayloadCharsAfter: 0,
+    semanticRemovedFraction: 0,
     fittedStateEstimatedTokens: 0,
     fittedStateChars: 0,
     fitStage: "none",
     jevRequests: 0,
+    verificationRequests: 0,
     jevInputTokens: 0,
     jevOutputTokens: 0,
     jevLatencyMs: 0,
@@ -37,6 +51,7 @@ export function initialCompactionStats(rawMessages: readonly unknown[]): Compact
     textsKept: 0,
     textsDropped: 0,
     semanticReductionActions: 0,
+    toolDecisionDiagnostics: [],
     redactions: 0,
   }
 }
@@ -75,14 +90,101 @@ function linkedAbort(parent: AbortSignal | undefined, timeoutMs: number): { sign
   }
 }
 
+function head(text: string, limit: number): string {
+  if (text.length <= limit) return text
+  if (limit <= 0) return `[… ${text.length} chars omitted …]`
+  return `${text.slice(0, limit)}\n[… ${text.length - limit} chars omitted …]`
+}
+
+function verificationState(
+  base: JevState,
+  call: ReturnType<typeof normalizeOpenCodeMessages>["toolCalls"][number],
+  options: PluginOptions,
+): { state: JsonValue; redactions: number } | undefined {
+  const result = call.result?.text ?? ""
+  const limits = [...new Set([
+    options.verificationResultPreviewChars,
+    8_000,
+    4_000,
+    2_000,
+    500,
+    0,
+  ].filter((value) => value <= options.verificationResultPreviewChars))]
+
+  for (const limit of limits) {
+    const input = redactSecrets(head(call.inputText, 2_000))
+    const output = redactSecrets(head(result, limit))
+    const state: JsonValue = {
+      ...base,
+      candidateTool: {
+        id: call.id,
+        name: call.toolName,
+        input: input.text,
+        result: {
+          status: call.result ? (call.result.isError ? "error" : "ok") : "none",
+          chars: result.length,
+          preview: output.text,
+        },
+      },
+    } as JsonValue
+    const tokens = estimateJsonTokens({
+      state,
+      questions: { verify: verificationQuestion(call.id, call.toolName, "drop") },
+    })
+    if (tokens <= Math.min(options.maxRequestTokens, 31_500)) {
+      return { state, redactions: input.count + output.count }
+    }
+  }
+  return undefined
+}
+
+function diagnostics(
+  transcript: ReturnType<typeof normalizeOpenCodeMessages>,
+  decisions: ReturnType<typeof composeDecisions>,
+): ToolDecisionDiagnostic[] {
+  const names = new Map(transcript.toolCalls.map((call) => [call.id, call.toolName] as const))
+  return decisions.tools.map((item) => ({
+    toolCallId: item.toolCallId,
+    toolName: names.get(item.toolCallId) ?? "unknown",
+    action: item.decision,
+    reason: item.reason,
+    ...(item.signals ? {
+      keepCall: item.signals.keepCall,
+      keepResult: item.signals.keepResult,
+      ...(item.signals.verification !== undefined ? { verification: item.signals.verification } : {}),
+    } : {}),
+  }))
+}
+
+function applyDecisionStats(
+  stats: CompactionStats,
+  transcript: ReturnType<typeof normalizeOpenCodeMessages>,
+  decisions: ReturnType<typeof composeDecisions>,
+  truncateHeadChars: number,
+): void {
+  stats.toolsKeptFull = decisions.tools.filter((item) => item.decision === "keep_full").length
+  stats.toolsTruncated = decisions.tools.filter((item) => item.decision === "keep_call_truncate_result").length
+  stats.toolsDropped = decisions.tools.filter((item) => item.decision === "drop").length
+  stats.textsKept = decisions.texts.filter((item) => item.keep).length
+  stats.textsDropped = decisions.texts.filter((item) => !item.keep).length
+  const actuallyTruncatedTools = decisions.tools.filter((item) => {
+    if (item.decision !== "keep_call_truncate_result") return false
+    const call = transcript.toolCalls.find((candidate) => candidate.id === item.toolCallId)
+    return Boolean(call?.result && call.result.text.length > truncateHeadChars)
+  }).length
+  stats.semanticReductionActions = stats.textsDropped + stats.toolsDropped + actuallyTruncatedTools
+  stats.toolDecisionDiagnostics = diagnostics(transcript, decisions)
+}
+
 export async function compactTranscript(
   rawMessages: readonly unknown[],
   asker: JevAsker,
   options: PluginOptions,
   parentSignal?: AbortSignal,
+  sessionID?: string,
 ): Promise<CompactionOutcome> {
   const compactionStarted = performance.now()
-  const stats = initialCompactionStats(rawMessages)
+  const stats = initialCompactionStats(rawMessages, sessionID)
   if (rawMessages.length === 0 || stats.originalEstimatedTokens === 0) return fallback(stats, "empty-transcript")
 
   let transcript: ReturnType<typeof normalizeOpenCodeMessages>
@@ -96,6 +198,7 @@ export async function compactTranscript(
     built = buildJevState(transcript, { toolResultPreviewChars: options.toolResultPreviewChars })
     stats.redactions = built.redactions
     if (!built.objective) return fallback(stats, "weak-objective-unresolved")
+
     const fit = fitState(built.state, { maxStateChars: options.maxStateChars, maxStateTokens: options.maxStateTokens })
     stats.fittedStateChars = fit.chars
     stats.fittedStateEstimatedTokens = fit.tokens
@@ -105,12 +208,8 @@ export async function compactTranscript(
 
     plan = buildQuestionPlan(fitted.state, transcript, built.constraints, built.files)
     stats.toolsScored = plan.tools.size
-    stats.textsScored = plan.texts.size
-    // If everything that could carry transcript payload is pinned, there is nothing
-    // useful for Jev to prune. Objective/file/constraint classification alone should
-    // not manufacture a checkpoint for an already-short session.
-    if (plan.tools.size === 0 && plan.texts.size === 0) return fallback(stats, "nothing-prunable")
-    if (Object.keys(plan.questions).length === 0) return fallback(stats, "nothing-to-score")
+    stats.textsScored = 0
+    if (plan.tools.size === 0) return fallback(stats, "nothing-prunable")
 
     const batches = batchQuestions(fitted.state, plan.questions, options.maxRequestTokens)
     if (!batches.ok) return fallback(stats, batches.reason)
@@ -125,64 +224,101 @@ export async function compactTranscript(
 
   try {
     const jevStarted = performance.now()
-    const results = await Promise.all(
+    const firstPass = await Promise.all(
       batching.batches.map((batch) => asker.ask(fitted.state as unknown as JsonValue, batch.questions, scope.signal)),
     )
-    stats.jevLatencyMs = Math.round(performance.now() - jevStarted)
     const answers: Record<string, JevAnswer> = {}
-    for (const result of results) {
+    for (const result of firstPass) {
       mergeAnswers(answers, result.response.answers)
       stats.jevRequests += 1
       stats.jevInputTokens += result.response.usage.input_tokens
       stats.jevOutputTokens += result.response.usage.output_tokens
     }
-    stats.estimatedJevCostUsd = stats.jevInputTokens / 1_000_000 * options.jevInputCostPerMillionUsd
     if (Object.keys(answers).length !== Object.keys(plan.questions).length) return fallback(stats, "missing-jev-answers")
 
-    try {
-      const decisions = composeDecisions(
-        transcript,
-        fitted.state,
-        built.objective,
-        built.constraints,
-        built.files,
-        plan,
-        answers,
-        {
-          keepThreshold: options.keepThreshold,
-          exactEvidenceThreshold: options.exactEvidenceThreshold,
-          discardThreshold: options.discardThreshold,
-          supersededThreshold: options.supersededThreshold,
-          uncertaintyMargin: options.uncertaintyMargin,
-          minConfidence: options.minConfidence,
-        },
-      )
-      stats.toolsKeptFull = decisions.tools.filter((item) => item.decision === "keep_full").length
-      stats.toolsTruncated = decisions.tools.filter((item) => item.decision === "keep_call_truncate_result").length
-      stats.toolsDropped = decisions.tools.filter((item) => item.decision === "drop").length
-      stats.textsKept = decisions.texts.filter((item) => item.keep).length
-      stats.textsDropped = decisions.texts.filter((item) => !item.keep).length
-      const actuallyTruncatedTools = decisions.tools.filter((item) => {
-        if (item.decision !== "keep_call_truncate_result") return false
-        const call = transcript.toolCalls.find((candidate) => candidate.id === item.toolCallId)
-        return Boolean(call?.result && call.result.text.length > options.truncateHeadChars)
-      }).length
-      stats.semanticReductionActions = stats.textsDropped + stats.toolsDropped + actuallyTruncatedTools
-      if (stats.semanticReductionActions === 0) return fallback(stats, "no-semantic-reduction")
-
-      const summary = assembleCheckpoint(transcript, built.constraints, built.files, decisions, {
-        truncateHeadChars: options.truncateHeadChars,
-      })
-      stats.checkpointEstimatedTokens = estimateTokens(summary)
-      const reduction = reductionGate(stats.originalEstimatedTokens, stats.checkpointEstimatedTokens, options.minReductionRatio)
-      stats.removedFraction = reduction.removedFraction
-      stats.remainingRatio = reduction.remainingRatio
-      if (!reduction.sufficient) return fallback(stats, "insufficient-reduction")
-
-      return { status: "ok", checkpoint: { summary, stats }, decisions }
-    } catch (error) {
-      return internalError(stats, error)
+    const composeOptions = {
+      keepThreshold: options.keepThreshold,
+      verificationThreshold: options.verificationThreshold,
+      uncertaintyMargin: options.uncertaintyMargin,
     }
+    const proposed = composeDecisions(
+      transcript,
+      fitted.state,
+      built.objective,
+      built.constraints,
+      built.files,
+      plan,
+      answers,
+      composeOptions,
+    )
+
+    const destructive = proposed.tools.filter((item) => item.decision !== "keep_full")
+    const verification = new Map<string, number>()
+
+    const verified = await Promise.all(destructive.map(async (item) => {
+      if (item.decision === "keep_full") {
+        return { id: item.toolCallId, probability: 0, result: undefined as JevBatchResult | undefined, redactions: 0 }
+      }
+      const call = transcript.toolCalls.find((candidate) => candidate.id === item.toolCallId)
+      if (!call || !call.result) return { id: item.toolCallId, probability: 0, result: undefined as JevBatchResult | undefined, redactions: 0 }
+      const candidate = verificationState(fitted.state, call, options)
+      if (!candidate) return { id: item.toolCallId, probability: 0, result: undefined as JevBatchResult | undefined, redactions: 0 }
+      const questions = { verify: verificationQuestion(call.id, call.toolName, item.decision) }
+      const result = await asker.ask(candidate.state, questions, scope.signal)
+      const value = result.response.answers.verify
+      if (!value || value.type !== "noul") throw new Error(`Missing or invalid Jev verification answer for ${call.id}`)
+      return { id: item.toolCallId, probability: value.noul, result, redactions: candidate.redactions }
+    }))
+
+    for (const item of verified) {
+      verification.set(item.id, item.probability)
+      stats.redactions += item.redactions
+      if (!item.result) continue
+      stats.jevRequests += 1
+      stats.verificationRequests += 1
+      stats.jevInputTokens += item.result.response.usage.input_tokens
+      stats.jevOutputTokens += item.result.response.usage.output_tokens
+    }
+
+    stats.jevLatencyMs = Math.round(performance.now() - jevStarted)
+    stats.estimatedJevCostUsd = stats.jevInputTokens / 1_000_000 * options.jevInputCostPerMillionUsd
+
+    const decisions = composeDecisions(
+      transcript,
+      fitted.state,
+      built.objective,
+      built.constraints,
+      built.files,
+      plan,
+      answers,
+      composeOptions,
+      verification,
+    )
+    applyDecisionStats(stats, transcript, decisions, options.truncateHeadChars)
+    const semantic = semanticPayloadReduction(
+      transcript,
+      decisions,
+      options.truncateHeadChars,
+      options.minReductionRatio,
+    )
+    stats.semanticPayloadCharsBefore = semantic.beforeChars
+    stats.semanticPayloadCharsAfter = semantic.afterChars
+    stats.semanticRemovedFraction = semantic.removedFraction
+
+    if (stats.semanticReductionActions === 0) return fallback(stats, "no-semantic-reduction")
+    if (!semantic.sufficient) return fallback(stats, "insufficient-semantic-reduction")
+
+    const summary = assembleCheckpoint(transcript, built.constraints, built.files, decisions, {
+      truncateHeadChars: options.truncateHeadChars,
+    })
+    stats.checkpointEstimatedTokens = estimateTokens(summary)
+
+    // Serialized reduction remains diagnostic only. It no longer authorizes success.
+    const serialized = reductionGate(stats.originalEstimatedTokens, stats.checkpointEstimatedTokens, 0)
+    stats.removedFraction = serialized.removedFraction
+    stats.remainingRatio = serialized.remainingRatio
+
+    return { status: "ok", checkpoint: { summary, stats }, decisions }
   } catch (error) {
     const reason = error instanceof Error && error.name === "AbortError"
       ? "jev-aborted"
