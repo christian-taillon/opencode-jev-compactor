@@ -98,15 +98,21 @@ export default Plugin.define({
     }))
 
     registrations.push(await ctx.session.hook("compaction", async (event) => {
-      if (event.result !== undefined) return
+      if (event.result !== undefined) {
+        const stats = initialCompactionStats(event.messages, event.sessionID)
+        stats.fallbackReason = "preexisting-compaction-result"
+        try { await persistRecord(makeRunRecord("fallback", "preexisting-compaction-result", stats)) } catch { /* observability only */ }
+        log({ event: "compaction.skipped", level: "warn", reason: "preexisting-compaction-result", sessionID: event.sessionID })
+        return
+      }
       if (!runtime.enabled) {
-        const stats = initialCompactionStats(event.messages)
+        const stats = initialCompactionStats(event.messages, event.sessionID)
         stats.fallbackReason = "plugin-disabled"
         try { await persistRecord(makeRunRecord("disabled", "plugin-disabled", stats)) } catch { /* observability only */ }
         return
       }
       if (!client) {
-        const stats = initialCompactionStats(event.messages)
+        const stats = initialCompactionStats(event.messages, event.sessionID)
         stats.fallbackReason = "missing-typesafe-api-key"
         try { await persistRecord(makeRunRecord("fallback", "missing-typesafe-api-key", stats)) } catch { /* observability only */ }
         log({ event: "compaction.fallback", level: "warn", reason: "missing-typesafe-api-key" })
@@ -114,16 +120,16 @@ export default Plugin.define({
       }
 
       try {
-        const outcome = await compactTranscript(event.messages, client, options, eventAbortSignal(event))
+        const outcome = await compactTranscript(event.messages, client, options, eventAbortSignal(event), event.sessionID)
         const stats = outcome.status === "ok" ? outcome.checkpoint.stats : outcome.stats
         if (outcome.status === "ok") {
           event.result = {
             summary: outcome.checkpoint.summary,
             metadata: {
               plugin: "opencode.jev-compaction",
-              version: "0.0.4",
+              version: "0.0.5",
               model: options.model,
-              policy: "quality-first-semantic-gate-v3",
+              policy: "chronological-two-pass-tool-pruning-v4",
               stats,
             },
           }
@@ -136,6 +142,8 @@ export default Plugin.define({
             textsKept: stats.textsKept,
             textsDropped: stats.textsDropped,
             semanticReductionActions: stats.semanticReductionActions,
+            semanticRemovedFraction: stats.semanticRemovedFraction,
+            verificationRequests: stats.verificationRequests,
             jevRequests: stats.jevRequests,
             jevInputTokens: stats.jevInputTokens,
             estimatedJevCostUsd: stats.estimatedJevCostUsd,
@@ -161,7 +169,7 @@ export default Plugin.define({
 
     log({
       event: "plugin.loaded",
-      version: "0.0.4",
+      version: "0.0.5",
       model: options.model,
       enabled: runtime.enabled,
       configuredEnabled: options.enabled,
