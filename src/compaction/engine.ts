@@ -256,6 +256,9 @@ export async function compactTranscript(
     const verification = new Map<string, number>()
 
     const verified = await Promise.all(destructive.map(async (item) => {
+      if (item.decision === "keep_full") {
+        return { id: item.toolCallId, probability: 0, result: undefined as JevBatchResult | undefined, redactions: 0 }
+      }
       const call = transcript.toolCalls.find((candidate) => candidate.id === item.toolCallId)
       if (!call || !call.result) return { id: item.toolCallId, probability: 0, result: undefined as JevBatchResult | undefined, redactions: 0 }
       const candidate = verificationState(fitted.state, call, options)
