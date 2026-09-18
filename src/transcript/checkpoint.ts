@@ -40,6 +40,7 @@ function keptTextByCategory(transcript: NormalizedTranscript, decisions: Compact
   const keep = new Map(decisions.texts.filter((item) => item.keep).map((item) => [item.textId, item] as const))
   const grouped = new Map<MessageCategory, TextBlock[]>()
   for (const block of transcript.textBlocks) {
+    if (!block.checkpointEligible) continue
     const decision = keep.get(block.id)
     if (!decision) continue
     const list = grouped.get(decision.category) ?? []
@@ -59,6 +60,21 @@ function uniqueEntries(blocks: readonly TextBlock[], emitted: Set<string>): stri
   return entries
 }
 
+function baselineEntry(transcript: NormalizedTranscript, section: keyof NonNullable<NormalizedTranscript["previousCheckpoint"]>["sections"]): string[] {
+  const value = transcript.previousCheckpoint?.sections[section]?.trim()
+  return value ? [value] : []
+}
+
+function dedupe(entries: string[]): string[] {
+  const seen = new Set<string>()
+  return entries.filter((entry) => {
+    const normalized = entry.trim()
+    if (!normalized || seen.has(normalized)) return false
+    seen.add(normalized)
+    return true
+  })
+}
+
 export function assembleCheckpoint(
   transcript: NormalizedTranscript,
   constraints: ConstraintCandidate[],
@@ -68,32 +84,49 @@ export function assembleCheckpoint(
 ): string {
   const grouped = keptTextByCategory(transcript, decisions)
   const emitted = new Set<string>()
-  const objective = decisions.objectiveTextId
-    ? transcript.textBlocks.find((block) => block.id === decisions.objectiveTextId)
-    : undefined
+  if (decisions.objectiveTextId) emitted.add(decisions.objectiveTextId)
+
   const keptConstraints = new Set(decisions.constraints.filter((item) => item.keep).map((item) => item.id))
   const keptFiles = new Set(decisions.files.filter((item) => item.keep).map((item) => item.id))
   const toolDecisions = new Map(decisions.tools.map((item) => [item.toolCallId, item.decision] as const))
 
   const sections: string[] = []
   const add = (heading: string, entries: string[]) => {
+    const values = dedupe(entries)
+    if (values.length === 0) return
     sections.push(`## ${heading}`)
-    sections.push(entries.length > 0 ? entries.join("\n\n") : "- None retained")
+    sections.push(values.join("\n\n"))
   }
 
-  if (objective) emitted.add(objective.id)
-  add("Objective", objective ? [exactTextEntry(objective)] : [])
-  add("Constraints", constraints.filter((candidate) => keptConstraints.has(candidate.id)).map((candidate) => `- ${candidate.text}`))
-  add("Files in play", files.filter((file) => keptFiles.has(file.id)).map((file) => `- \`${file.path}\``))
-  add("Decisions", uniqueEntries(grouped.get("decision") ?? [], emitted))
-  add("Completed", uniqueEntries(grouped.get("completed") ?? [], emitted))
+  add("Objective", decisions.objectiveText ? [fence(decisions.objectiveText)] : [])
+  add("Constraints", [
+    ...baselineEntry(transcript, "Constraints"),
+    ...constraints.filter((candidate) => keptConstraints.has(candidate.id)).map((candidate) => `- ${candidate.text}`),
+  ])
+  add("Files in play", [
+    ...baselineEntry(transcript, "Files in play"),
+    ...files.filter((file) => keptFiles.has(file.id)).map((file) => `- \`${file.path}\``),
+  ])
+  add("Decisions", [
+    ...baselineEntry(transcript, "Decisions"),
+    ...uniqueEntries(grouped.get("decision") ?? [], emitted),
+  ])
+  add("Completed", [
+    ...baselineEntry(transcript, "Completed"),
+    ...uniqueEntries(grouped.get("completed") ?? [], emitted),
+  ])
   add("Active work", [
+    ...baselineEntry(transcript, "Active work"),
     ...uniqueEntries(grouped.get("active") ?? [], emitted),
     ...uniqueEntries(grouped.get("constraint") ?? [], emitted),
   ])
-  add("Next move", uniqueEntries(grouped.get("next_move") ?? [], emitted))
+  add("Next move", [
+    ...baselineEntry(transcript, "Next move"),
+    ...uniqueEntries(grouped.get("next_move") ?? [], emitted),
+  ])
 
   const evidence = [
+    ...baselineEntry(transcript, "Kept evidence"),
     ...uniqueEntries(grouped.get("evidence") ?? [], emitted),
     ...uniqueEntries(grouped.get("objective") ?? [], emitted),
   ]
@@ -107,5 +140,6 @@ export function assembleCheckpoint(
     }
   }
   add("Kept evidence", evidence)
+
   return sections.join("\n\n").trim()
 }
