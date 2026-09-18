@@ -62,16 +62,6 @@ function mergeCallRuns(history: JevHistoryEntry[]): JevHistoryEntry[] {
   return merged
 }
 
-function result(state: JevState, stage: string): FitResult {
-  const measured = measure(state)
-  return {
-    ok: measured.chars <= Number.MAX_SAFE_INTEGER,
-    state,
-    ...measured,
-    stage,
-  } as FitResult
-}
-
 export function fitState(input: JevState, options: FitOptions): FitResult {
   const state = clone(input)
   const measured = () => measure(state)
