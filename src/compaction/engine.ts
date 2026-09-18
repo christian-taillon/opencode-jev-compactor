@@ -295,8 +295,6 @@ export async function compactTranscript(
       verification,
     )
     applyDecisionStats(stats, transcript, decisions, options.truncateHeadChars)
-    if (stats.semanticReductionActions === 0) return fallback(stats, "no-semantic-reduction")
-
     const semantic = semanticPayloadReduction(
       transcript,
       decisions,
@@ -306,6 +304,8 @@ export async function compactTranscript(
     stats.semanticPayloadCharsBefore = semantic.beforeChars
     stats.semanticPayloadCharsAfter = semantic.afterChars
     stats.semanticRemovedFraction = semantic.removedFraction
+
+    if (stats.semanticReductionActions === 0) return fallback(stats, "no-semantic-reduction")
     if (!semantic.sufficient) return fallback(stats, "insufficient-semantic-reduction")
 
     const summary = assembleCheckpoint(transcript, built.constraints, built.files, decisions, {
