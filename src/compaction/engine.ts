@@ -36,6 +36,7 @@ export function initialCompactionStats(rawMessages: readonly unknown[]): Compact
     textsScored: 0,
     textsKept: 0,
     textsDropped: 0,
+    semanticReductionActions: 0,
     redactions: 0,
   }
 }
@@ -94,6 +95,7 @@ export async function compactTranscript(
     transcript = normalizeOpenCodeMessages(rawMessages, options.preserveRecentMessages)
     built = buildJevState(transcript, { toolResultPreviewChars: options.toolResultPreviewChars })
     stats.redactions = built.redactions
+    if (!built.objective) return fallback(stats, "weak-objective-unresolved")
     const fit = fitState(built.state, { maxStateChars: options.maxStateChars, maxStateTokens: options.maxStateTokens })
     stats.fittedStateChars = fit.chars
     stats.fittedStateEstimatedTokens = fit.tokens
@@ -141,6 +143,7 @@ export async function compactTranscript(
       const decisions = composeDecisions(
         transcript,
         fitted.state,
+        built.objective,
         built.constraints,
         built.files,
         plan,
@@ -159,6 +162,13 @@ export async function compactTranscript(
       stats.toolsDropped = decisions.tools.filter((item) => item.decision === "drop").length
       stats.textsKept = decisions.texts.filter((item) => item.keep).length
       stats.textsDropped = decisions.texts.filter((item) => !item.keep).length
+      const actuallyTruncatedTools = decisions.tools.filter((item) => {
+        if (item.decision !== "keep_call_truncate_result") return false
+        const call = transcript.toolCalls.find((candidate) => candidate.id === item.toolCallId)
+        return Boolean(call?.result && call.result.text.length > options.truncateHeadChars)
+      }).length
+      stats.semanticReductionActions = stats.textsDropped + stats.toolsDropped + actuallyTruncatedTools
+      if (stats.semanticReductionActions === 0) return fallback(stats, "no-semantic-reduction")
 
       const summary = assembleCheckpoint(transcript, built.constraints, built.files, decisions, {
         truncateHeadChars: options.truncateHeadChars,

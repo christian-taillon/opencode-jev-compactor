@@ -121,9 +121,9 @@ export default Plugin.define({
             summary: outcome.checkpoint.summary,
             metadata: {
               plugin: "opencode.jev-compaction",
-              version: "0.0.3",
+              version: "0.0.4",
               model: options.model,
-              policy: "quality-first-disposal-proof-v2",
+              policy: "quality-first-semantic-gate-v3",
               stats,
             },
           }
@@ -135,6 +135,7 @@ export default Plugin.define({
             toolsDropped: stats.toolsDropped,
             textsKept: stats.textsKept,
             textsDropped: stats.textsDropped,
+            semanticReductionActions: stats.semanticReductionActions,
             jevRequests: stats.jevRequests,
             jevInputTokens: stats.jevInputTokens,
             estimatedJevCostUsd: stats.estimatedJevCostUsd,
@@ -160,7 +161,7 @@ export default Plugin.define({
 
     log({
       event: "plugin.loaded",
-      version: "0.0.3",
+      version: "0.0.4",
       model: options.model,
       enabled: runtime.enabled,
       configuredEnabled: options.enabled,

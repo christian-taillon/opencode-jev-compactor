@@ -11,6 +11,7 @@ export interface TextBlock {
   text: string
   source: "content" | "text-part" | "reasoning" | "unknown-part"
   pinned: boolean
+  checkpointEligible: boolean
 }
 
 export interface AttachmentBlock {
@@ -55,12 +56,28 @@ export interface TranscriptMessage {
   pinned: boolean
 }
 
+export interface PreviousCheckpoint {
+  messageIndex: number
+  objective?: string
+  sections: Partial<Record<
+    "Objective" | "Constraints" | "Files in play" | "Decisions" | "Completed" | "Active work" | "Next move" | "Kept evidence",
+    string
+  >>
+}
+
+export interface ResolvedObjective {
+  text: string
+  source: "user" | "previous-checkpoint"
+  textId?: string
+}
+
 export interface NormalizedTranscript {
   messages: TranscriptMessage[]
   textBlocks: TextBlock[]
   attachments: AttachmentBlock[]
   toolCalls: ToolCall[]
   toolResults: ToolResult[]
+  previousCheckpoint?: PreviousCheckpoint
   newestUserMessageId?: string
   firstMessageId?: string
 }
@@ -144,6 +161,7 @@ export interface FileDecision {
 }
 
 export interface CompactionDecisions {
+  objectiveText?: string
   objectiveTextId?: string
   tools: ToolDecision[]
   texts: TextDecision[]
@@ -171,6 +189,7 @@ export interface CompactionStats {
   textsScored: number
   textsKept: number
   textsDropped: number
+  semanticReductionActions: number
   redactions: number
   fallbackReason?: string
 }

@@ -1,4 +1,5 @@
-import type { ConstraintCandidate, FileCandidate, NormalizedTranscript } from "../domain/types.js"
+import type { ConstraintCandidate, FileCandidate, NormalizedTranscript, ResolvedObjective } from "../domain/types.js"
+import { isWeakFollowUp, resolveObjective } from "../transcript/checkpoint-state.js"
 import { redactSecrets } from "./redact.js"
 
 export interface JevStateTool {
@@ -26,10 +27,15 @@ export interface JevStateText {
   text: string
   pinned: boolean
   source: string
+  checkpointEligible: boolean
 }
 
 export interface JevState {
   goal: string
+  baseline: {
+    objective?: string
+    sections: Record<string, string>
+  } | null
   objectiveCandidates: { id: string; text: string }[]
   recentTurns: JevStateMessage[]
   textBlocks: JevStateText[]
@@ -40,6 +46,7 @@ export interface JevState {
 
 export interface BuiltState {
   state: JevState
+  objective?: ResolvedObjective
   files: FileCandidate[]
   constraints: ConstraintCandidate[]
   redactions: number
@@ -73,7 +80,7 @@ function extractConstraints(transcript: NormalizedTranscript): ConstraintCandida
   const out: ConstraintCandidate[] = []
   const seen = new Set<string>()
   const cue = /\b(must|never|do not|don't|required|requirement|only|without|cannot|can't|should not|preserve|avoid|fallback|prefer|keep)\b/i
-  for (const block of transcript.textBlocks.filter((item) => item.role === "user")) {
+  for (const block of transcript.textBlocks.filter((item) => item.role === "user" && item.checkpointEligible)) {
     for (const line of block.text.split(/\r?\n/).map((value) => value.trim()).filter(Boolean)) {
       if (!cue.test(line) || seen.has(line) || line.length > 700) continue
       seen.add(line)
@@ -110,16 +117,23 @@ export function buildJevState(transcript: NormalizedTranscript, options: BuildSt
     text: redact(block.text),
     pinned: block.pinned,
     source: block.source,
+    checkpointEligible: block.checkpointEligible,
   }))
   const objectiveCandidates = transcript.messages
     .filter((message) => message.role === "user")
     .slice(-5)
     .map((message) => ({ id: message.id, text: redact(messageText.get(message.id) ?? "") }))
-    .filter((candidate) => candidate.text.length > 0)
-  const newestUserMessage = transcript.newestUserMessageId
-    ? transcript.messages.find((message) => message.id === transcript.newestUserMessageId)
-    : [...transcript.messages].reverse().find((message) => message.role === "user")
-  const goal = newestUserMessage ? redact(messageText.get(newestUserMessage.id) ?? "") : ""
+    .filter((candidate) => candidate.text.length > 0 && !isWeakFollowUp(candidate.text))
+  const objective = resolveObjective(transcript)
+  const goal = objective ? redact(objective.text) : ""
+  const baseline = transcript.previousCheckpoint
+    ? {
+        ...(transcript.previousCheckpoint.objective ? { objective: redact(transcript.previousCheckpoint.objective) } : {}),
+        sections: Object.fromEntries(
+          Object.entries(transcript.previousCheckpoint.sections).map(([key, value]) => [key, redact(value)]),
+        ),
+      }
+    : null
 
   const filesMap = new Map<string, FileCandidate>()
   const tools = transcript.toolCalls.map((call) => {
@@ -146,6 +160,7 @@ export function buildJevState(transcript: NormalizedTranscript, options: BuildSt
   return {
     state: {
       goal,
+      baseline,
       objectiveCandidates,
       recentTurns,
       textBlocks,
@@ -156,5 +171,6 @@ export function buildJevState(transcript: NormalizedTranscript, options: BuildSt
     files: [...filesMap.values()],
     constraints,
     redactions,
+    ...(objective ? { objective } : {}),
   }
 }

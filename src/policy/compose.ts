@@ -6,6 +6,7 @@ import type {
   FileDecision,
   MessageCategory,
   NormalizedTranscript,
+  ResolvedObjective,
   TextDecision,
   TextSignals,
   ToolDecision,
@@ -13,7 +14,7 @@ import type {
   ToolSignals,
 } from "../domain/types.js"
 import type { QuestionPlan } from "../jev/questions.js"
-import type { ChoiceAnswer, JevAnswer, ScoreAnswer } from "../jev/types.js"
+import type { JevAnswer, ScoreAnswer } from "../jev/types.js"
 import type { JevState } from "../state/build.js"
 
 export interface ComposeOptions {
@@ -232,30 +233,10 @@ function composeCandidate(
   }
 }
 
-function chooseObjectiveTextId(
-  state: JevState,
-  transcript: NormalizedTranscript,
-  plan: QuestionPlan,
-  answers: Record<string, JevAnswer>,
-  options: ComposeOptions,
-): string | undefined {
-  if (plan.objective) {
-    const objective = answer(answers, plan.objective, "choice") as ChoiceAnswer
-    if (objective.confidence >= options.minConfidence) {
-      const index = Number.parseInt(objective.choice.replace("candidate_", ""), 10)
-      const selected = state.objectiveCandidates[index]
-      if (selected) {
-        const block = transcript.textBlocks.find((item) => item.messageId === selected.id && item.role === "user")
-        if (block) return block.id
-      }
-    }
-  }
-  return transcript.textBlocks.find((item) => item.messageId === transcript.newestUserMessageId)?.id
-}
-
 export function composeDecisions(
   transcript: NormalizedTranscript,
   state: JevState,
+  objective: ResolvedObjective,
   constraints: ConstraintCandidate[],
   files: FileCandidate[],
   plan: QuestionPlan,
@@ -277,7 +258,7 @@ export function composeDecisions(
     id: candidate.id,
     ...composeCandidate(plan.files.get(candidate.id), answers, options),
   }))
-  const objectiveTextId = chooseObjectiveTextId(state, transcript, plan, answers, options)
+  const objectiveTextId = objective.textId
 
   const requiredTextIds = new Map<string, MessageCategory>()
   if (objectiveTextId) requiredTextIds.set(objectiveTextId, "objective")
@@ -286,7 +267,7 @@ export function composeDecisions(
     if (keptConstraintIds.has(candidate.id)) requiredTextIds.set(candidate.sourceTextId, "constraint")
   }
 
-  const texts = transcript.textBlocks.map((block) => {
+  const texts = transcript.textBlocks.filter((block) => block.checkpointEligible).map((block) => {
     const decision = composeText(block.id, transcript, plan, answers, options)
     const forcedCategory = requiredTextIds.get(block.id)
     if (!forcedCategory || decision.keep) return decision
@@ -294,6 +275,7 @@ export function composeDecisions(
   })
 
   return {
+    objectiveText: objective.text,
     ...(objectiveTextId ? { objectiveTextId } : {}),
     tools,
     texts,
