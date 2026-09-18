@@ -1,0 +1,23 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "outDir": ".test-dist",
+    "rootDir": ".",
+    "noEmit": false,
+    "declaration": false,
+    "sourceMap": false,
+    "types": []
+  },
+  "include": [
+    "src/domain/**/*.ts",
+    "src/transcript/**/*.ts",
+    "src/state/**/*.ts",
+    "src/jev/**/*.ts",
+    "src/policy/**/*.ts",
+    "src/compaction/**/*.ts",
+    "src/plugin/options.ts",
+    "src/observability/history.ts",
+    "src/observability/json.ts"
+  ],
+  "exclude": ["src/index.ts", "src/tui.ts", "src/rpc.ts", "src/tools/**"]
+}

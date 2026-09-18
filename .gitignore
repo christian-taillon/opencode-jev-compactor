@@ -1,0 +1,12 @@
+node_modules/
+.test-dist/
+coverage/
+dist/
+.pnpm-store/
+.env
+.env.*
+!.env.example
+*.log
+*.tgz
+*.zip
+.DS_Store

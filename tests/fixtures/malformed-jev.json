@@ -1,0 +1,7 @@
+{
+  "model": "jev-latest",
+  "answers": {
+    "q": {"type":"choice","choice":"not-an-option","confidence":2,"probabilities":{}}
+  },
+  "usage": {"input_tokens":10,"output_tokens":2}
+}

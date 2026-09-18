@@ -1,0 +1,6 @@
+[
+  {"id":"m0","role":"user","content":[{"type":"text","text":"Fix the parser."}]},
+  {"id":"m1","role":"assistant","content":[{"type":"text","text":"I inspected parser.ts."}]},
+  {"id":"m2","role":"user","content":[{"type":"text","text":"Keep strict TypeScript."}]},
+  {"id":"m3","role":"assistant","content":[{"type":"text","text":"The current code is already short."}]}
+]
