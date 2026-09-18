@@ -35,7 +35,6 @@ export interface QuestionPlan {
   texts: Map<string, TextQuestionIds>
   constraints: Map<string, string>
   files: Map<string, string>
-  objective?: string
 }
 
 const CATEGORIES: Record<MessageCategory, string> = {
@@ -154,7 +153,7 @@ export function buildQuestionPlan(
 
   const stateTextIndex = new Map(state.textBlocks.map((block, index) => [block.id, index] as const))
   for (const block of transcript.textBlocks) {
-    if (block.pinned || block.source === "unknown-part") continue
+    if (!block.checkpointEligible || block.pinned || block.source === "unknown-part") continue
     const index = stateTextIndex.get(block.id)
     if (index === undefined) continue
     const prefix = `text_${texts.size}`
@@ -212,18 +211,6 @@ export function buildQuestionPlan(
     fileIds.set(candidate.id, id)
   }
 
-  let objective: string | undefined
-  if (state.objectiveCandidates.length > 0) {
-    objective = "session_objective"
-    const criteria: Record<string, string> = {}
-    for (let index = 0; index < state.objectiveCandidates.length; index += 1) {
-      criteria[`candidate_${index}`] = `Use \`objectiveCandidates[${index}].text\` if it best represents the newest active user objective.`
-    }
-    questions[objective] = choice(
-      "Which objective candidate best represents the current active user objective? Choose one candidate only; do not rewrite it.",
-      criteria,
-    )
-  }
 
   return {
     questions,
@@ -231,6 +218,5 @@ export function buildQuestionPlan(
     texts,
     constraints: constraintIds,
     files: fileIds,
-    ...(objective ? { objective } : {}),
   }
 }
