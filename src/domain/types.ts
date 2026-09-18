@@ -108,29 +108,9 @@ export type ToolDecisionKind = "keep_full" | "keep_call_truncate_result" | "drop
 
 export interface ToolSignals {
   keepCall: number
-  exactEvidence: number
-  unresolvedBlocker: number
-  completedWork: number
-  repeatWorkRisk: number
-  superseded: number
-  truncateSafe: number
-  safeToDiscard: number
-  relevance: number
-  relevanceConfidence: number
-  choice: ToolDecisionKind
-  choiceConfidence: number
-  choiceProbabilities: Record<string, number>
-}
-
-export interface TextSignals {
-  keep: number
-  safeToDiscard: number
-  superseded: number
-  relevance: number
-  relevanceConfidence: number
-  category: MessageCategory
-  categoryConfidence: number
-  categoryProbabilities: Record<string, number>
+  keepResult: number
+  /** Present only for a destructive truncate/drop candidate that received a second-pass verification. */
+  verification?: number
 }
 
 export interface ToolDecision {
@@ -145,7 +125,6 @@ export interface TextDecision {
   keep: boolean
   category: MessageCategory
   reason: "pinned" | "unknown-part" | "newest-user" | "jev" | "uncertain" | "retained-fact"
-  signals?: TextSignals
 }
 
 export interface ConstraintDecision {
@@ -169,15 +148,33 @@ export interface CompactionDecisions {
   files: FileDecision[]
 }
 
+export interface ToolDecisionDiagnostic {
+  toolCallId: string
+  toolName: string
+  action: ToolDecisionKind
+  reason: ToolDecision["reason"]
+  keepCall?: number
+  keepResult?: number
+  verification?: number
+}
+
 export interface CompactionStats {
+  sessionID?: string
+  pluginVersion?: string
   originalEstimatedTokens: number
   checkpointEstimatedTokens: number
+  /** Representation-only size difference retained for diagnostics. Never authorizes compaction. */
   removedFraction: number
   remainingRatio: number
+  /** Payload accounting over text/tool content, independent of JSON/Markdown serialization. */
+  semanticPayloadCharsBefore: number
+  semanticPayloadCharsAfter: number
+  semanticRemovedFraction: number
   fittedStateEstimatedTokens: number
   fittedStateChars: number
   fitStage: string
   jevRequests: number
+  verificationRequests: number
   jevInputTokens: number
   jevOutputTokens: number
   jevLatencyMs: number
@@ -190,6 +187,7 @@ export interface CompactionStats {
   textsKept: number
   textsDropped: number
   semanticReductionActions: number
+  toolDecisionDiagnostics: ToolDecisionDiagnostic[]
   redactions: number
   fallbackReason?: string
 }
