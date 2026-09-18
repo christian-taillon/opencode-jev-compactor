@@ -21,8 +21,8 @@ export function formatRun(record: CompactionRunRecord): string {
   const stats = record.stats
   const lines = [
     `${record.at}  ${record.status}${record.reason ? ` (${record.reason})` : ""}`,
-    `context ${stats.originalEstimatedTokens.toLocaleString()} -> checkpoint ${stats.checkpointEstimatedTokens.toLocaleString()} tokens; removed ${(stats.removedFraction * 100).toFixed(1)}%`,
-    `tools full/truncated/dropped ${stats.toolsKeptFull}/${stats.toolsTruncated}/${stats.toolsDropped}; text kept/dropped ${stats.textsKept}/${stats.textsDropped}`,
+    `context ${stats.originalEstimatedTokens.toLocaleString()} -> checkpoint ${stats.checkpointEstimatedTokens.toLocaleString()} tokens; estimated serialized reduction ${(stats.removedFraction * 100).toFixed(1)}%`,
+    `semantic actions ${stats.semanticReductionActions}; tools full/truncated/dropped ${stats.toolsKeptFull}/${stats.toolsTruncated}/${stats.toolsDropped}; text kept/dropped ${stats.textsKept}/${stats.textsDropped}`,
     `Jev ${stats.jevRequests} request(s), ${stats.jevInputTokens.toLocaleString()} input tokens, ${stats.jevLatencyMs} ms, est. $${stats.estimatedJevCostUsd.toFixed(6)}`,
   ]
   return lines.join("\n")
