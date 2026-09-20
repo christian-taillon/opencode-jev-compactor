@@ -39,7 +39,7 @@ function composeTool(
   plan: QuestionPlan,
   answers: Record<string, JevAnswer>,
   options: ComposeOptions,
-  verification: ReadonlyMap<string, number>,
+  verification: ReadonlyMap<string, number> | undefined,
 ): ToolDecision {
   if (pinned) return { toolCallId: callId, decision: "keep_full", reason: "pinned" }
   const ids = plan.tools.get(callId)
@@ -47,7 +47,7 @@ function composeTool(
 
   const keepCall = answer(answers, ids.keepCall).noul
   const keepResult = answer(answers, ids.keepResult).noul
-  const verify = verification.get(callId)
+  const verify = verification?.get(callId)
   const signals: ToolSignals = {
     keepCall,
     keepResult,
@@ -65,7 +65,11 @@ function composeTool(
   const proposed = keepCall >= options.keepThreshold ? "keep_call_truncate_result" : "drop"
   // A first-pass proposal is intentionally provisional. Engine code verifies every
   // destructive action with richer candidate evidence before installing it.
-  if (verify === undefined) return { toolCallId: callId, decision: proposed, reason: "jev", signals }
+  if (verify === undefined) {
+    return verification
+      ? { toolCallId: callId, decision: "keep_full", reason: "uncertain", signals }
+      : { toolCallId: callId, decision: proposed, reason: "jev", signals }
+  }
 
   if (uncertain(verify, options.uncertaintyMargin) || verify < options.verificationThreshold) {
     return { toolCallId: callId, decision: "keep_full", reason: "uncertain", signals }
@@ -82,7 +86,7 @@ export function composeDecisions(
   plan: QuestionPlan,
   answers: Record<string, JevAnswer>,
   options: ComposeOptions,
-  verification: ReadonlyMap<string, number> = new Map(),
+  verification?: ReadonlyMap<string, number>,
 ): CompactionDecisions {
   const tools = transcript.toolCalls.map((call) => composeTool(
     call.id,

@@ -63,9 +63,9 @@ export function buildQuestionPlan(
   return {
     questions,
     tools,
-    texts: new Map(),
-    constraints: new Map(),
-    files: new Map(),
+    texts: new Map<string, never>(),
+    constraints: new Map<string, never>(),
+    files: new Map<string, never>(),
   }
 }
 

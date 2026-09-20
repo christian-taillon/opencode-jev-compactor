@@ -8,7 +8,7 @@ import type {
   ToolResult,
   TranscriptMessage,
 } from "../domain/types.js"
-import { extractCheckpointEnvelope, isWeakFollowUp, parseCheckpointMarkdown } from "./checkpoint-state.js"
+import { extractCheckpointEnvelope, parseCheckpointMarkdown } from "./checkpoint-state.js"
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value)
@@ -108,6 +108,31 @@ function toolResultText(part: Record<string, unknown>): string {
   return safeStringify(value)
 }
 
+function openCodeToolResult(part: Record<string, unknown>): { text: string; isError: boolean } | undefined {
+  if (!isRecord(part.result)) return undefined
+  const result = part.result
+  const type = readString(result, "type")
+  if (type === "text" || type === "error") {
+    const value = result.value
+    return {
+      text: typeof value === "string" ? value : safeStringify(value),
+      isError: type === "error",
+    }
+  }
+  if (type === "json") return { text: safeStringify(result.value), isError: false }
+  if (type === "content" && Array.isArray(result.value)) {
+    return {
+      text: result.value.map((entry) => {
+        if (!isRecord(entry)) return safeStringify(entry)
+        if (entry.type === "text" && typeof entry.text === "string") return entry.text
+        return attachmentDescriptor(entry)
+      }).join("\n"),
+      isError: false,
+    }
+  }
+  return undefined
+}
+
 function openCodeToolStateResultText(state: Record<string, unknown>): string {
   const content = toolResultText(state)
   if (state.status !== "error") return content
@@ -120,7 +145,7 @@ function openCodeToolStateResultText(state: Record<string, unknown>): string {
 function attachmentDescriptor(part: Record<string, unknown>): string {
   const type = readString(part, "type") ?? "attachment"
   const name = readString(part, "filename", "name", "title")
-  const mediaType = readString(part, "mediaType", "mimeType", "mime_type")
+  const mediaType = readString(part, "mediaType", "mimeType", "mime_type", "mime")
   const path = readString(part, "path")
   const url = readString(part, "url", "uri")
   const pieces = [type]
@@ -140,7 +165,7 @@ function isToolResultType(type: string): boolean {
 }
 
 function isAttachmentType(type: string): boolean {
-  return type === "file" || type === "image" || type === "attachment" || type === "resource"
+  return type === "file" || type === "image" || type === "media" || type === "attachment" || type === "resource"
 }
 
 function pinTranscript(transcript: NormalizedTranscript, preserveRecentMessages: number): void {
@@ -202,7 +227,7 @@ export function normalizeOpenCodeMessages(rawMessages: readonly unknown[], prese
       text: value,
       source,
       pinned: false,
-      checkpointEligible: role !== "user" || !isWeakFollowUp(value),
+      checkpointEligible: true,
     }
     textBlocks.push(text)
     message.textBlocks.push(text)
@@ -291,6 +316,10 @@ export function normalizeOpenCodeMessages(rawMessages: readonly unknown[], prese
       const type = readString(rawPart, "type") ?? "unknown"
       if (CONTROL_TYPES.has(type)) continue
       if (type === "reasoning") continue
+      if (type === "compaction") {
+        if (typeof rawPart.text === "string") recordCheckpoint(messageIndex, parseCheckpointMarkdown(rawPart.text))
+        continue
+      }
       if (type === "text") {
         addText(message, messageIndex, partIndex, role, readString(rawPart, "text", "value") ?? "", "text-part")
         continue
@@ -332,14 +361,15 @@ export function normalizeOpenCodeMessages(rawMessages: readonly unknown[], prese
       if (isToolResultType(type)) {
         const callId = readString(rawPart, "toolCallId", "tool_call_id", "toolUseId", "tool_use_id", "id") ?? `${messageId}:orphan:${partIndex}`
         const toolName = readString(rawPart, "toolName", "tool_name", "name", "tool")
+        const nativeResult = openCodeToolResult(rawPart)
         const result: ToolResult = {
           id: `${callId}:result:${messageIndex}:${partIndex}`,
           toolCallId: callId,
           messageId,
           messageIndex,
           ...(toolName ? { toolName } : {}),
-          text: toolResultText(rawPart),
-          isError: rawPart.isError === true || rawPart.error === true || type === "tool-error" || type === "tool_error",
+          text: nativeResult?.text ?? toolResultText(rawPart),
+          isError: nativeResult?.isError === true || rawPart.isError === true || rawPart.error === true || type === "tool-error" || type === "tool_error",
           pinned: false,
         }
         toolResults.push(result)

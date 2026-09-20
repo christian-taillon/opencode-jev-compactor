@@ -87,19 +87,30 @@ test("pinning keeps first, newest user, and recent messages", async () => {
   assert.equal(transcript.messages.find((m) => m.id === "m2").pinned, false)
 })
 
-test("normalizer accepts native OpenCode v2 assistant tool-state messages", () => {
+test("normalizer accepts exact OpenCode 2.0.7 Message tool and media parts", () => {
   const raw = [
-    { id: "u1", type: "user", text: "Fix /tmp/project/build.ts", files: [{ type: "file", path: "/tmp/project/build.ts" }] },
-    { id: "a1", type: "assistant", content: [
+    { id: "u1", role: "user", content: [
+      { type: "text", text: "Fix /tmp/project/build.ts" },
+      { type: "media", mediaType: "text/plain", filename: "build.ts", data: "embedded-data-must-not-be-retained" },
+    ] },
+    { id: "a1", role: "assistant", content: [
       { type: "text", text: "Checking the failure." },
-      { type: "tool", id: "call-1", name: "shell", state: { status: "error", input: { command: "npm test" }, error: { message: "exit 1" }, content: [{ type: "text", text: "FAIL src/build.test.ts" }] } },
+      { type: "reasoning", text: "private chain of thought" },
+      { type: "effort", effort: "high" },
+      { type: "tool-call", id: "call-1", name: "shell", input: { command: "pnpm test" } },
+    ] },
+    { id: "t1", role: "tool", content: [
+      { type: "tool-result", id: "call-1", name: "shell", result: { type: "error", value: "FAIL src/build.test.ts\nexit 1" } },
     ] },
   ]
   const transcript = normalizeOpenCodeMessages(raw, 1)
   assert.equal(transcript.toolCalls[0].toolName, "shell")
-  assert.match(transcript.toolCalls[0].inputText, /npm test/)
+  assert.match(transcript.toolCalls[0].inputText, /pnpm test/)
+  assert.equal(transcript.toolCalls[0].result.text, "FAIL src/build.test.ts\nexit 1")
   assert.equal(transcript.toolCalls[0].result.isError, true)
-  assert.match(transcript.attachments[0].descriptor, /path=\/tmp\/project\/build\.ts/)
+  assert.equal(transcript.attachments[0].descriptor, "media name=build.ts mediaType=text/plain")
+  assert.doesNotMatch(transcript.attachments[0].descriptor, /embedded-data/)
+  assert.doesNotMatch(transcript.textBlocks.map((block) => block.text).join("\n"), /chain of thought|effort/)
 })
 
 test("checkpoint parser extracts structured baseline without preserving the envelope", () => {
@@ -138,6 +149,30 @@ test("weak follow-ups resolve to previous checkpoint objective", async () => {
   const objective = resolveObjective(transcript)
   assert.equal(objective?.source, "previous-checkpoint")
   assert.match(objective?.text ?? "", /Continue explaining the assistant/)
+})
+
+test("weak follow-up text is retained verbatim while an earlier objective is resolved", () => {
+  const raw = [
+    { id: "u1", role: "user", content: [{ type: "text", text: "Implement the exact migration." }] },
+    { id: "a1", role: "assistant", content: [{ type: "text", text: "The implementation is in progress." }] },
+    { id: "u2", role: "user", content: [{ type: "text", text: "continue" }] },
+  ]
+  const transcript = normalizeOpenCodeMessages(raw, 0)
+  const built = buildJevState(transcript, { toolResultPreviewChars: 300 })
+  const plan = buildQuestionPlan(built.state, transcript, built.constraints, built.files)
+  const decisions = composeDecisions(
+    transcript,
+    built.state,
+    built.objective,
+    built.constraints,
+    built.files,
+    plan,
+    {},
+    composeOptions,
+  )
+  const summary = assembleCheckpoint(transcript, built.constraints, built.files, decisions, { truncateHeadChars: 600 })
+  assert.equal(built.objective.text, "Implement the exact migration.")
+  assert.match(summary, /```text\ncontinue\n```/)
 })
 
 test("Jev state is chronological and tool results are tiny previews without changing originals", () => {
@@ -183,10 +218,12 @@ test("state fitting aggressively collapses old Jev-only history", () => {
       { i: 2, messageId: "m2", role: "assistant", text: "b".repeat(10000), pinned: false },
     ],
   }
+  const original = structuredClone(state)
   const fitted = fitState(state, { maxStateChars: 3000, maxStateTokens: 3000 })
   assert.equal(fitted.ok, true)
   assert.notEqual(fitted.stage, "full")
   assert.ok(fitted.state.history.length <= 3)
+  assert.deepEqual(state, original)
 })
 
 test("secret redaction removes obvious credentials", () => {
@@ -353,6 +390,33 @@ test("keep-everything Jev run safely falls back with no semantic reduction", asy
   assert.equal(outcome.stats.textsDropped, 0)
 })
 
+test("verification evidence that cannot fit the request budget fails toward keep-full", async () => {
+  const raw = await fixture("tool-heavy-session.json")
+  raw.splice(1, 0, {
+    id: "padding",
+    role: "assistant",
+    content: [{ type: "text", text: "word ".repeat(4000) }],
+  })
+  let verificationAnswers = 0
+  const asker = noulAsker((id) => {
+    if (id === "verify") verificationAnswers += 1
+    return id === "verify" ? 0.95 : 0.05
+  })
+  const outcome = await compactTranscript(raw, asker, {
+    ...DEFAULT_OPTIONS,
+    preserveRecentMessages: 2,
+    maxRequestTokens: 5000,
+    timeoutMs: 1000,
+  })
+  assert.equal(outcome.status, "fallback")
+  assert.equal(outcome.reason, "no-semantic-reduction")
+  assert.ok(outcome.stats.jevRequests > 0)
+  assert.equal(outcome.stats.verificationRequests, 0)
+  assert.equal(verificationAnswers, 0)
+  assert.equal(outcome.stats.toolsKeptFull, 2)
+  assert.equal(outcome.stats.toolDecisionDiagnostics.every((item) => item.verification === undefined), true)
+})
+
 test("weak objective with no substantive request falls back before Jev", async () => {
   let calls = 0
   const outcome = await compactTranscript(
@@ -372,6 +436,8 @@ test("text-only short session is nothing-prunable and never calls Jev", async ()
   assert.equal(outcome.status, "fallback")
   assert.equal(outcome.reason, "nothing-prunable")
   assert.equal(calls, 0)
+  assert.ok(outcome.stats.semanticPayloadCharsBefore > 0)
+  assert.equal(outcome.stats.semanticPayloadCharsAfter, outcome.stats.semanticPayloadCharsBefore)
 })
 
 test("Jev failure safely falls back", async () => {
@@ -441,7 +507,20 @@ test("history exposes semantic metrics and bounded per-tool diagnostics", () => 
   }
   const record = makeRunRecord("ok", null, stats, "2026-01-02T00:00:00Z")
   assert.match(formatRun(record), /semantic payload 100,000 -> 30,000 chars; removed 70\.0%/)
+  assert.match(formatRun(record), /Jev state 70,000 chars \/ 20,000 tokens; fit old-calls-compacted/)
   assert.match(formatRun(record), /t1:read:drop\/call=0\.10\/result=0\.10\/verify=0\.95/)
+
+  const legacyStats = { ...stats }
+  for (const key of [
+    "pluginVersion",
+    "sessionID",
+    "semanticPayloadCharsBefore",
+    "semanticPayloadCharsAfter",
+    "semanticRemovedFraction",
+    "verificationRequests",
+    "toolDecisionDiagnostics",
+  ]) delete legacyStats[key]
+  assert.match(formatRun(makeRunRecord("ok", null, legacyStats, "2025-01-01T00:00:00Z")), /plugin pre-0\.0\.5/)
   const history = appendHistory(
     [makeRunRecord("ok", null, stats, "2026-01-01T00:00:00Z"), record],
     makeRunRecord("fallback", "no-semantic-reduction", stats, "2026-01-03T00:00:00Z"),

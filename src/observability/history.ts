@@ -39,6 +39,7 @@ export function formatRun(record: CompactionRunRecord): string {
     `session ${stats.sessionID ?? "unknown"}; plugin ${stats.pluginVersion ?? "pre-0.0.5"}`,
     `context ${stats.originalEstimatedTokens.toLocaleString()} -> checkpoint ${stats.checkpointEstimatedTokens.toLocaleString()} tokens; serialized reduction ${((stats.removedFraction ?? 0) * 100).toFixed(1)}%`,
     `semantic payload ${(stats.semanticPayloadCharsBefore ?? 0).toLocaleString()} -> ${(stats.semanticPayloadCharsAfter ?? 0).toLocaleString()} chars; removed ${((stats.semanticRemovedFraction ?? 0) * 100).toFixed(1)}%`,
+    `Jev state ${(stats.fittedStateChars ?? 0).toLocaleString()} chars / ${(stats.fittedStateEstimatedTokens ?? 0).toLocaleString()} tokens; fit ${stats.fitStage ?? "unknown"}`,
     `semantic actions ${stats.semanticReductionActions ?? 0}; tools full/truncated/dropped ${stats.toolsKeptFull}/${stats.toolsTruncated}/${stats.toolsDropped}; text kept/dropped ${stats.textsKept}/${stats.textsDropped}`,
     `Jev ${stats.jevRequests} request(s) (${stats.verificationRequests ?? 0} verification), ${stats.jevInputTokens.toLocaleString()} input tokens, ${stats.jevLatencyMs} ms, est. $${stats.estimatedJevCostUsd.toFixed(6)}`,
     ...decisionLines(stats),

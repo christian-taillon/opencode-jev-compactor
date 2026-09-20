@@ -2,14 +2,17 @@ import type {
   CompactionOutcome,
   CompactionStats,
   JsonValue,
+  ToolDecision,
   ToolDecisionDiagnostic,
+  ToolDecisionKind,
 } from "../domain/types.js"
 import { batchQuestions } from "../jev/batch.js"
 import { buildQuestionPlan, verificationQuestion } from "../jev/questions.js"
 import type { JevAnswer, JevBatchResult, JevQuestion } from "../jev/types.js"
 import type { PluginOptions } from "../plugin/options.js"
+import { toJson } from "../observability/json.js"
 import { composeDecisions } from "../policy/compose.js"
-import { reductionGate, semanticPayloadReduction } from "../policy/reduction.js"
+import { reductionGate, semanticPayloadChars, semanticPayloadReduction } from "../policy/reduction.js"
 import { buildJevState, type JevState } from "../state/build.js"
 import { estimateJsonTokens, estimateTokens } from "../state/estimate.js"
 import { fitState } from "../state/fit.js"
@@ -99,6 +102,7 @@ function head(text: string, limit: number): string {
 function verificationState(
   base: JevState,
   call: ReturnType<typeof normalizeOpenCodeMessages>["toolCalls"][number],
+  proposed: Exclude<ToolDecisionKind, "keep_full">,
   options: PluginOptions,
 ): { state: JsonValue; redactions: number } | undefined {
   const result = call.result?.text ?? ""
@@ -108,13 +112,15 @@ function verificationState(
     4_000,
     2_000,
     500,
-    0,
-  ].filter((value) => value <= options.verificationResultPreviewChars))]
+  ].filter((value) =>
+    value <= options.verificationResultPreviewChars &&
+    (result.length <= options.toolResultPreviewChars || value > options.toolResultPreviewChars)
+  ))]
 
   for (const limit of limits) {
     const input = redactSecrets(head(call.inputText, 2_000))
     const output = redactSecrets(head(result, limit))
-    const state: JsonValue = {
+    const state = toJson({
       ...base,
       candidateTool: {
         id: call.id,
@@ -126,10 +132,10 @@ function verificationState(
           preview: output.text,
         },
       },
-    } as JsonValue
+    })
     const tokens = estimateJsonTokens({
       state,
-      questions: { verify: verificationQuestion(call.id, call.toolName, "drop") },
+      questions: { verify: verificationQuestion(call.id, call.toolName, proposed) },
     })
     if (tokens <= Math.min(options.maxRequestTokens, 31_500)) {
       return { state, redactions: input.count + output.count }
@@ -195,6 +201,8 @@ export async function compactTranscript(
 
   try {
     transcript = normalizeOpenCodeMessages(rawMessages, options.preserveRecentMessages)
+    stats.semanticPayloadCharsBefore = semanticPayloadChars(transcript)
+    stats.semanticPayloadCharsAfter = stats.semanticPayloadCharsBefore
     built = buildJevState(transcript, { toolResultPreviewChars: options.toolResultPreviewChars })
     stats.redactions = built.redactions
     if (!built.objective) return fallback(stats, "weak-objective-unresolved")
@@ -224,8 +232,9 @@ export async function compactTranscript(
 
   try {
     const jevStarted = performance.now()
+    const firstPassState = toJson(fitted.state)
     const firstPass = await Promise.all(
-      batching.batches.map((batch) => asker.ask(fitted.state as unknown as JsonValue, batch.questions, scope.signal)),
+      batching.batches.map((batch) => asker.ask(firstPassState, batch.questions, scope.signal)),
     )
     const answers: Record<string, JevAnswer> = {}
     for (const result of firstPass) {
@@ -252,28 +261,27 @@ export async function compactTranscript(
       composeOptions,
     )
 
-    const destructive = proposed.tools.filter((item) => item.decision !== "keep_full")
+    const destructive = proposed.tools.filter((item): item is ToolDecision & {
+      decision: Exclude<ToolDecisionKind, "keep_full">
+    } => item.decision !== "keep_full")
     const verification = new Map<string, number>()
 
     const verified = await Promise.all(destructive.map(async (item) => {
-      if (item.decision === "keep_full") {
-        return { id: item.toolCallId, probability: 0, result: undefined as JevBatchResult | undefined, redactions: 0 }
-      }
       const call = transcript.toolCalls.find((candidate) => candidate.id === item.toolCallId)
-      if (!call || !call.result) return { id: item.toolCallId, probability: 0, result: undefined as JevBatchResult | undefined, redactions: 0 }
-      const candidate = verificationState(fitted.state, call, options)
-      if (!candidate) return { id: item.toolCallId, probability: 0, result: undefined as JevBatchResult | undefined, redactions: 0 }
+      if (!call || !call.result) return { id: item.toolCallId, verified: false as const, redactions: 0 }
+      const candidate = verificationState(fitted.state, call, item.decision, options)
+      if (!candidate) return { id: item.toolCallId, verified: false as const, redactions: 0 }
       const questions = { verify: verificationQuestion(call.id, call.toolName, item.decision) }
       const result = await asker.ask(candidate.state, questions, scope.signal)
       const value = result.response.answers.verify
       if (!value || value.type !== "noul") throw new Error(`Missing or invalid Jev verification answer for ${call.id}`)
-      return { id: item.toolCallId, probability: value.noul, result, redactions: candidate.redactions }
+      return { id: item.toolCallId, verified: true as const, probability: value.noul, result, redactions: candidate.redactions }
     }))
 
     for (const item of verified) {
+      if (!item.verified) continue
       verification.set(item.id, item.probability)
       stats.redactions += item.redactions
-      if (!item.result) continue
       stats.jevRequests += 1
       stats.verificationRequests += 1
       stats.jevInputTokens += item.result.response.usage.input_tokens
