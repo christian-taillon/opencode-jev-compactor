@@ -15,10 +15,13 @@ const statusOutput = {
     overrideActive: { type: "boolean" as const },
     apiKeyConfigured: { type: "boolean" as const },
     model: { type: "string" as const },
+    pluginVersion: { type: "string" as const },
+    hookInvocations: { type: "integer" as const },
+    lastHookInvocationAt: { type: ["string", "null"] as const },
     lastRun: { type: "string" as const },
     history: { type: "string" as const },
   },
-  required: ["enabled", "configuredEnabled", "overrideActive", "apiKeyConfigured", "model", "lastRun", "history"],
+  required: ["enabled", "configuredEnabled", "overrideActive", "apiKeyConfigured", "model", "pluginVersion", "hookInvocations", "lastHookInvocationAt", "lastRun", "history"],
   additionalProperties: false,
 } as const
 

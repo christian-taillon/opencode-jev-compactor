@@ -24,7 +24,7 @@ export interface JevAsker {
   ask(state: JsonValue, questions: Record<string, JevQuestion>, signal?: AbortSignal): Promise<JevBatchResult>
 }
 
-const PLUGIN_VERSION = "0.0.5"
+export const PLUGIN_VERSION = "0.0.5"
 
 export function initialCompactionStats(rawMessages: readonly unknown[], sessionID?: string): CompactionStats {
   return {

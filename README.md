@@ -8,7 +8,7 @@ If the plugin cannot produce a useful checkpoint safely, it leaves `event.result
 
 ## Compatibility
 
-Version `0.0.5` targets **OpenCode 2.0.7** and pins `@opencode/plugin` to `2.0.7`.
+Version `0.0.5` targets **OpenCode 2.0.14** and pins `@opencode/plugin` to `2.0.14`.
 
 The OpenCode adapter is version-sensitive. After changing OpenCode or `@opencode/plugin`, run:
 
@@ -273,7 +273,8 @@ If a compaction hook arrives with `event.result` already populated, 0.0.5 record
 
 `/jev-status` reports:
 
-- session ID and plugin version for the last run
+- current loaded plugin version, in-memory hook invocation count and last hook timestamp (since server load)
+- session ID and historical plugin version for the last recorded run
 - serialized reduction for diagnostics
 - semantic payload before/after and actual semantic reduction
 - first-pass and verification request counts

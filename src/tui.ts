@@ -7,6 +7,9 @@ interface JevStatus {
   overrideActive: boolean
   apiKeyConfigured: boolean
   model: string
+  pluginVersion: string
+  hookInvocations: number
+  lastHookInvocationAt: string | null
   lastRun: string
   history: string
 }
@@ -20,6 +23,9 @@ function parseStatus(value: unknown): JevStatus {
     typeof record.overrideActive !== "boolean" ||
     typeof record.apiKeyConfigured !== "boolean" ||
     typeof record.model !== "string" ||
+    typeof record.pluginVersion !== "string" ||
+    typeof record.hookInvocations !== "number" ||
+    (record.lastHookInvocationAt !== null && typeof record.lastHookInvocationAt !== "string") ||
     typeof record.lastRun !== "string" ||
     typeof record.history !== "string"
   ) throw new Error("Invalid Jev status response")
@@ -53,11 +59,14 @@ export default Plugin.define({
                     title: `Jev Compaction: ${status.enabled ? "ON" : "OFF"}`,
                     message: [
                       `Model: ${status.model}`,
+                      `Loaded plugin: ${status.pluginVersion}`,
+                      `Hook invocations (since load): ${status.hookInvocations}`,
+                      `Last hook invocation: ${status.lastHookInvocationAt ?? "never"}`,
                       `Configured default: ${status.configuredEnabled ? "ON" : "OFF"}`,
                       `Runtime override: ${status.overrideActive ? "active" : "none"}`,
                       `API key: ${status.apiKeyConfigured ? "configured" : "missing"}`,
                       "",
-                      "Last run",
+                      "Last recorded run (historical)",
                       status.lastRun,
                       "",
                       "Previous runs",

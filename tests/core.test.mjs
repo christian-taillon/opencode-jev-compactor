@@ -506,6 +506,7 @@ test("history exposes semantic metrics and bounded per-tool diagnostics", () => 
     redactions: 0,
   }
   const record = makeRunRecord("ok", null, stats, "2026-01-02T00:00:00Z")
+  assert.match(formatRun(record), /historical plugin 0\.0\.5/)
   assert.match(formatRun(record), /semantic payload 100,000 -> 30,000 chars; removed 70\.0%/)
   assert.match(formatRun(record), /Jev state 70,000 chars \/ 20,000 tokens; fit old-calls-compacted/)
   assert.match(formatRun(record), /t1:read:drop\/call=0\.10\/result=0\.10\/verify=0\.95/)

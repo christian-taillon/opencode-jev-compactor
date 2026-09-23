@@ -1,5 +1,5 @@
 import { Plugin } from "@opencode/plugin"
-import { compactTranscript, initialCompactionStats } from "./compaction/engine.js"
+import { compactTranscript, initialCompactionStats, PLUGIN_VERSION } from "./compaction/engine.js"
 import type { CompactionRunRecord } from "./domain/types.js"
 import { JevClient } from "./jev/client.js"
 import { appendHistory, formatHistory, formatRun, makeRunRecord } from "./observability/history.js"
@@ -48,6 +48,8 @@ export default Plugin.define({
       enabled: storedOverride ?? options.enabled,
       overrideActive: storedOverride !== undefined,
       history: coerceHistory(await ctx.storage.get("history")).slice(-options.historyLimit),
+      hookInvocations: 0,
+      lastHookInvocationAt: null as string | null,
     }
 
     const persistRecord = async (record: CompactionRunRecord) => {
@@ -66,6 +68,9 @@ export default Plugin.define({
         overrideActive: runtime.overrideActive,
         apiKeyConfigured: Boolean(client),
         model: options.model,
+        pluginVersion: PLUGIN_VERSION,
+        hookInvocations: runtime.hookInvocations,
+        lastHookInvocationAt: runtime.lastHookInvocationAt,
         lastRun: last ? formatRun(last) : "No compaction run recorded yet.",
         history: formatHistory(runtime.history.slice(0, -1)),
       }
@@ -98,6 +103,8 @@ export default Plugin.define({
     }))
 
     registrations.push(await ctx.session.hook("compaction", async (event) => {
+      runtime.hookInvocations += 1
+      runtime.lastHookInvocationAt = new Date().toISOString()
       if (event.result !== undefined) {
         const stats = initialCompactionStats(event.messages, event.sessionID)
         stats.fallbackReason = "preexisting-compaction-result"
@@ -127,7 +134,7 @@ export default Plugin.define({
             summary: outcome.checkpoint.summary,
             metadata: {
               plugin: "opencode.jev-compaction",
-              version: "0.0.5",
+              version: PLUGIN_VERSION,
               model: options.model,
               policy: "chronological-two-pass-tool-pruning-v4",
               stats,
@@ -169,7 +176,7 @@ export default Plugin.define({
 
     log({
       event: "plugin.loaded",
-      version: "0.0.5",
+      version: PLUGIN_VERSION,
       model: options.model,
       enabled: runtime.enabled,
       configuredEnabled: options.enabled,

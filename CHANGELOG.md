@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Pinned `@opencode/plugin` to OpenCode 2.0.14 and verified the compaction hook, RPC, TUI, and storage contracts.
+- Displayed the loaded plugin version and per-load hook invocation count/timestamp separately from historical compaction runs in `/jev-status`.
 - Added conventional root entrypoints so OpenCode 2.0.7 can discover all server, TUI, and RPC features when the repository is configured as a local plugin directory.
 - Mounted TUI keymap registration inside the application slot to ensure the OpenCode keymap provider exists during registration.
 - Made `/jev-status` easier to read with an extra-large dialog, one detailed latest run, and compact previous-run summaries.

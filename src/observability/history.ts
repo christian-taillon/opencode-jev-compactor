@@ -36,7 +36,7 @@ export function formatRun(record: CompactionRunRecord): string {
   const stats = record.stats
   const lines = [
     `${record.at}  ${record.status}${record.reason ? ` (${record.reason})` : ""}`,
-    `session ${stats.sessionID ?? "unknown"}; plugin ${stats.pluginVersion ?? "pre-0.0.5"}`,
+    `session ${stats.sessionID ?? "unknown"}; historical plugin ${stats.pluginVersion ?? "pre-0.0.5"}`,
     `context ${stats.originalEstimatedTokens.toLocaleString()} -> checkpoint ${stats.checkpointEstimatedTokens.toLocaleString()} tokens; serialized reduction ${((stats.removedFraction ?? 0) * 100).toFixed(1)}%`,
     `semantic payload ${(stats.semanticPayloadCharsBefore ?? 0).toLocaleString()} -> ${(stats.semanticPayloadCharsAfter ?? 0).toLocaleString()} chars; removed ${((stats.semanticRemovedFraction ?? 0) * 100).toFixed(1)}%`,
     `Jev state ${(stats.fittedStateChars ?? 0).toLocaleString()} chars / ${(stats.fittedStateEstimatedTokens ?? 0).toLocaleString()} tokens; fit ${stats.fitStage ?? "unknown"}`,
