@@ -1,4 +1,5 @@
 import { Plugin } from "@opencode/plugin"
+import { randomUUID } from "node:crypto"
 import { compactTranscript, initialCompactionStats, PLUGIN_VERSION } from "./compaction/engine.js"
 import type { CompactionRunRecord } from "./domain/types.js"
 import { JevClient } from "./jev/client.js"
@@ -36,6 +37,8 @@ function eventAbortSignal(event: unknown): AbortSignal | undefined {
 export default Plugin.define({
   id: "opencode.jev-compaction",
   async setup(ctx) {
+    const instanceId = randomUUID()
+    const setupAt = new Date().toISOString()
     const options = parseOptions(ctx.options)
     const apiKey = process.env.TYPESAFE_API_KEY?.trim()
     const registrations: Registration[] = []
@@ -48,7 +51,11 @@ export default Plugin.define({
       enabled: storedOverride ?? options.enabled,
       overrideActive: storedOverride !== undefined,
       history: coerceHistory(await ctx.storage.get("history")).slice(-options.historyLimit),
+      modelRequestCount: 0,
+      lastModelRequestSessionID: null as string | null,
+      lastModelRequestAt: null as string | null,
       hookInvocations: 0,
+      lastHookSessionID: null as string | null,
       lastHookInvocationAt: null as string | null,
     }
 
@@ -69,7 +76,16 @@ export default Plugin.define({
         apiKeyConfigured: Boolean(client),
         model: options.model,
         pluginVersion: PLUGIN_VERSION,
+        processPid: process.pid,
+        instanceId,
+        setupAt,
+        locationDirectory: ctx.location.directory,
+        locationWorkspaceID: ctx.location.workspaceID ?? null,
+        modelRequestCount: runtime.modelRequestCount,
+        lastModelRequestSessionID: runtime.lastModelRequestSessionID,
+        lastModelRequestAt: runtime.lastModelRequestAt,
         hookInvocations: runtime.hookInvocations,
+        lastHookSessionID: runtime.lastHookSessionID,
         lastHookInvocationAt: runtime.lastHookInvocationAt,
         lastRun: last ? formatRun(last) : "No compaction run recorded yet.",
         history: formatHistory(runtime.history.slice(0, -1)),
@@ -102,8 +118,16 @@ export default Plugin.define({
       },
     }))
 
+    registrations.push(await ctx.session.hook("model.request", (event) => {
+      if (event.kind !== "compaction") return
+      runtime.modelRequestCount += 1
+      runtime.lastModelRequestSessionID = event.sessionID
+      runtime.lastModelRequestAt = new Date().toISOString()
+    }))
+
     registrations.push(await ctx.session.hook("compaction", async (event) => {
       runtime.hookInvocations += 1
+      runtime.lastHookSessionID = event.sessionID
       runtime.lastHookInvocationAt = new Date().toISOString()
       if (event.result !== undefined) {
         const stats = initialCompactionStats(event.messages, event.sessionID)

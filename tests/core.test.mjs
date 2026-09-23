@@ -16,6 +16,7 @@ import { compactTranscript } from "../.test-dist/src/compaction/engine.js"
 import { DEFAULT_OPTIONS, parseOptions } from "../.test-dist/src/plugin/options.js"
 import { appendHistory, formatHistory, formatRun, makeRunRecord } from "../.test-dist/src/observability/history.js"
 import { toJson } from "../.test-dist/src/observability/json.js"
+import plugin from "../.test-dist/src/index.js"
 
 async function fixture(name) {
   return JSON.parse(await readFile(new URL(`./fixtures/${name}`, import.meta.url), "utf8"))
@@ -75,6 +76,60 @@ test("storage JSON normalization removes undefined and rejects non-finite values
     nested: [{ value: 1 }],
   })
   assert.throws(() => toJson({ latency: Number.POSITIVE_INFINITY }), /non-finite/)
+})
+
+test("status reports instance identity and only compaction hook/request observations", async () => {
+  const hooks = new Map()
+  let handlers
+  const storage = new Map()
+  const dispose = { async dispose() {} }
+  const cleanup = await plugin.setup({
+    options: { enableCompareTool: false },
+    location: { directory: "/test/location" },
+    storage: {
+      async get(key) { return storage.get(key) },
+      async set(key, value) { storage.set(key, value) },
+    },
+    rpc: { async register(_definition, value) { handlers = value; return dispose } },
+    session: { async hook(name, callback) { hooks.set(name, callback); return dispose } },
+  })
+  try {
+    const initial = await handlers.status()
+    assert.equal(initial.processPid, process.pid)
+    assert.match(initial.instanceId, /^[0-9a-f-]{36}$/)
+    assert.ok(!Number.isNaN(Date.parse(initial.setupAt)))
+    assert.equal(initial.locationDirectory, "/test/location")
+    assert.equal(initial.locationWorkspaceID, null)
+    assert.equal(initial.modelRequestCount, 0)
+    assert.equal(initial.lastModelRequestSessionID, null)
+    assert.equal(initial.lastModelRequestAt, null)
+    assert.equal(initial.hookInvocations, 0)
+    assert.equal(initial.lastHookSessionID, null)
+    assert.equal(initial.lastHookInvocationAt, null)
+
+    const primary = { kind: "primary", sessionID: "ses_primary" }
+    const request = { kind: "compaction", sessionID: "ses_request" }
+    await hooks.get("model.request")(primary)
+    await hooks.get("model.request")(request)
+    assert.deepEqual(primary, { kind: "primary", sessionID: "ses_primary" })
+    assert.deepEqual(request, { kind: "compaction", sessionID: "ses_request" })
+    const observed = await handlers.status()
+    assert.equal(observed.instanceId, initial.instanceId)
+    assert.equal(observed.modelRequestCount, 1)
+    assert.equal(observed.lastModelRequestSessionID, "ses_request")
+    assert.ok(!Number.isNaN(Date.parse(observed.lastModelRequestAt)))
+    assert.equal(observed.hookInvocations, 0)
+
+    await hooks.get("compaction")({ sessionID: "ses_compact", messages: [], result: { summary: "already set" } })
+    const after = await handlers.status()
+    assert.equal(after.hookInvocations, 1)
+    assert.equal(after.lastHookSessionID, "ses_compact")
+    assert.ok(!Number.isNaN(Date.parse(after.lastHookInvocationAt)))
+    assert.equal(after.modelRequestCount, 1)
+    assert.doesNotMatch(JSON.stringify(after), /already set/)
+  } finally {
+    await cleanup?.()
+  }
 })
 
 test("pinning keeps first, newest user, and recent messages", async () => {
