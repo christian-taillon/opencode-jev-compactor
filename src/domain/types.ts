@@ -107,16 +107,16 @@ export type MessageCategory =
 export type ToolDecisionKind = "keep_full" | "keep_call_truncate_result" | "drop"
 
 export interface ToolSignals {
-  keepCall: number
+  keepCall?: number
   keepResult: number
-  /** Present only for a destructive truncate/drop candidate that received a second-pass verification. */
+  /** Legacy 0.0.5 field retained so historical diagnostics remain readable. */
   verification?: number
 }
 
 export interface ToolDecision {
   toolCallId: string
   decision: ToolDecisionKind
-  reason: "pinned" | "jev" | "uncertain"
+  reason: "pinned" | "policy" | "jev" | "uncertain"
   signals?: ToolSignals
 }
 
@@ -155,6 +155,7 @@ export interface ToolDecisionDiagnostic {
   reason: ToolDecision["reason"]
   keepCall?: number
   keepResult?: number
+  /** Legacy 0.0.5 field retained so historical records remain readable. */
   verification?: number
 }
 
@@ -174,6 +175,7 @@ export interface CompactionStats {
   fittedStateChars: number
   fitStage: string
   jevRequests: number
+  /** Legacy metric. Single-pass 0.0.6 runs always record zero. */
   verificationRequests: number
   jevInputTokens: number
   jevOutputTokens: number
