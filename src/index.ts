@@ -160,7 +160,7 @@ export default Plugin.define({
               plugin: "opencode.jev-compaction",
               version: PLUGIN_VERSION,
               model: options.model,
-              policy: "chronological-two-pass-tool-pruning-v4",
+              policy: "single-pass-deterministic-tool-policy-v5",
               stats,
             },
           }
@@ -174,7 +174,6 @@ export default Plugin.define({
             textsDropped: stats.textsDropped,
             semanticReductionActions: stats.semanticReductionActions,
             semanticRemovedFraction: stats.semanticRemovedFraction,
-            verificationRequests: stats.verificationRequests,
             jevRequests: stats.jevRequests,
             jevInputTokens: stats.jevInputTokens,
             estimatedJevCostUsd: stats.estimatedJevCostUsd,
