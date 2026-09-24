@@ -9,6 +9,7 @@ import { fitState } from "../.test-dist/src/state/fit.js"
 import { redactSecrets } from "../.test-dist/src/state/redact.js"
 import { buildQuestionPlan } from "../.test-dist/src/jev/questions.js"
 import { composeDecisions } from "../.test-dist/src/policy/compose.js"
+import { classifyTool } from "../.test-dist/src/policy/tool-policy.js"
 import { reductionGate, semanticPayloadReduction } from "../.test-dist/src/policy/reduction.js"
 import { assembleCheckpoint } from "../.test-dist/src/transcript/checkpoint.js"
 import { parseJevResponse, JevMalformedResponseError } from "../.test-dist/src/jev/parse.js"
@@ -40,32 +41,29 @@ function noulAsker(answer) {
   }
 }
 
-const discardAsker = noulAsker((id) => id === "verify" ? 0.95 : 0.05)
-const truncateAsker = noulAsker((id) => id === "verify" ? 0.95 : id.includes("keep_call") ? 0.95 : 0.05)
+const discardAsker = noulAsker(() => 0.05)
+const truncateAsker = noulAsker((id) => id.includes("keep_call") ? 0.95 : 0.05)
 const keepEverythingAsker = noulAsker(() => 0.95)
 
 const composeOptions = {
   keepThreshold: DEFAULT_OPTIONS.keepThreshold,
-  verificationThreshold: DEFAULT_OPTIONS.verificationThreshold,
-  uncertaintyMargin: DEFAULT_OPTIONS.uncertaintyMargin,
 }
 
-test("0.0.5 options expose two-pass quality policy and tight request budgets", () => {
+test("0.0.6 options expose single-pass policy and bounded batch concurrency", () => {
+  assert.equal(DEFAULT_OPTIONS.keepThreshold, 0.15)
+  assert.equal(DEFAULT_OPTIONS.maxConcurrentRequests, 2)
   const parsed = parseOptions({
     enabled: false,
-    keepThreshold: 0.45,
-    verificationThreshold: 0.9,
-    uncertaintyMargin: 0.1,
+    keepThreshold: 0.2,
     toolResultPreviewChars: 250,
-    verificationResultPreviewChars: 12000,
     maxStateTokens: 23000,
     maxRequestTokens: 30000,
+    maxConcurrentRequests: 1,
   })
   assert.equal(parsed.enabled, false)
-  assert.equal(parsed.keepThreshold, 0.45)
-  assert.equal(parsed.verificationThreshold, 0.9)
+  assert.equal(parsed.keepThreshold, 0.2)
   assert.equal(parsed.toolResultPreviewChars, 250)
-  assert.equal(parsed.verificationResultPreviewChars, 12000)
+  assert.equal(parsed.maxConcurrentRequests, 1)
   assert.equal(parsed.maxRequestTokens, 30000)
   assert.equal(parseOptions({ maxRequestTokens: 60000 }).maxRequestTokens, DEFAULT_OPTIONS.maxRequestTokens)
 })
@@ -291,8 +289,8 @@ test("secret redaction removes obvious credentials", () => {
 function buildToolHarness() {
   const raw = [
     { id: "m0", role: "user", content: [{ type: "text", text: "Fix the build." }] },
-    { id: "m1", role: "assistant", content: [{ type: "tool-call", toolCallId: "t1", toolName: "shell", input: { command: "npm test" } }] },
-    { id: "m2", role: "tool", content: [{ type: "tool-result", toolCallId: "t1", output: "failure output" }] },
+    { id: "m1", role: "assistant", content: [{ type: "tool-call", toolCallId: "t1", toolName: "read", input: { path: "src/build.ts" } }] },
+    { id: "m2", role: "tool", content: [{ type: "tool-result", toolCallId: "t1", output: "file contents" }] },
     { id: "m3", role: "user", content: [{ type: "text", text: "Continue with the current failure." }] },
   ]
   const transcript = normalizeOpenCodeMessages(raw, 1)
@@ -300,12 +298,12 @@ function buildToolHarness() {
   const plan = buildQuestionPlan(built.state, transcript, built.constraints, built.files)
   const ids = plan.tools.get("t1")
   assert.ok(ids)
-  const decide = (keepCall, keepResult, verify) => {
+  assert.ok(ids.keepCall)
+  const decide = (keepCall, keepResult) => {
     const answers = {
       [ids.keepCall]: { type: "noul", noul: keepCall },
       [ids.keepResult]: { type: "noul", noul: keepResult },
     }
-    const verification = verify === undefined ? new Map() : new Map([["t1", verify]])
     return composeDecisions(
       transcript,
       built.state,
@@ -315,42 +313,80 @@ function buildToolHarness() {
       plan,
       answers,
       composeOptions,
-      verification,
     ).tools.find((item) => item.toolCallId === "t1")
   }
   return { decide, plan }
 }
 
-test("tool first pass is exactly two narrow questions", () => {
+test("drop-eligible tool gets exactly two narrow questions in one pass", () => {
   const { plan } = buildToolHarness()
   assert.equal(plan.tools.size, 1)
   assert.equal(Object.keys(plan.questions).length, 2)
+  assert.equal(Object.keys(plan.questions).includes("verify"), false)
 })
 
 test("exact-result retention keeps full tool evidence", () => {
   const { decide } = buildToolHarness()
-  assert.equal(decide(0.1, 0.9, undefined).decision, "keep_full")
+  assert.equal(decide(0.05, 0.9).decision, "keep_full")
 })
 
-test("verified provenance candidate truncates result", () => {
+test("retained provenance truncates a stale bulky result", () => {
   const { decide } = buildToolHarness()
-  assert.equal(decide(0.9, 0.1, 0.95).decision, "keep_call_truncate_result")
+  assert.equal(decide(0.9, 0.05).decision, "keep_call_truncate_result")
 })
 
-test("verified disposable candidate drops call and result", () => {
+test("low call and result retention drops an eligible read-only tool", () => {
   const { decide } = buildToolHarness()
-  assert.equal(decide(0.1, 0.1, 0.95).decision, "drop")
+  assert.equal(decide(0.05, 0.05).decision, "drop")
 })
 
-test("failed or uncertain verification fails toward full retention", () => {
+test("threshold equality keeps rather than destroys", () => {
   const { decide } = buildToolHarness()
-  assert.equal(decide(0.1, 0.1, 0.2).decision, "keep_full")
-  assert.equal(decide(0.1, 0.1, 0.5).decision, "keep_full")
+  assert.equal(decide(0.05, DEFAULT_OPTIONS.keepThreshold).decision, "keep_full")
+})
+
+test("deterministic tool policy protects risky, unknown, incomplete, and failed tools", () => {
+  const result = { id: "r", toolCallId: "x", messageId: "m", messageIndex: 1, text: "ok", isError: false, pinned: false }
+  const base = { id: "x", messageId: "m", messageIndex: 1, inputText: "{}", pinned: false, result }
+  assert.equal(classifyTool({ ...base, toolName: "read" }), "drop_eligible")
+  assert.equal(classifyTool({ ...base, toolName: "shell" }), "protect_call")
+  assert.equal(classifyTool({ ...base, toolName: "question" }), "pin_full")
+  assert.equal(classifyTool({ ...base, toolName: "future_tool" }), "pin_full")
+  assert.equal(classifyTool({ ...base, toolName: "read", result: { ...result, isError: true } }), "pin_full")
+  assert.equal(classifyTool({ ...base, toolName: "read", result: undefined }), "pin_full")
+})
+
+test("protected-call tools ask only result retention and can never drop provenance", () => {
+  const raw = [
+    { id: "m0", role: "user", content: [{ type: "text", text: "Run the tests." }] },
+    { id: "m1", role: "assistant", content: [{ type: "tool-call", toolCallId: "t1", toolName: "shell", input: { command: "pnpm test" } }] },
+    { id: "m2", role: "tool", content: [{ type: "tool-result", toolCallId: "t1", output: "x".repeat(2000) }] },
+    { id: "m3", role: "user", content: [{ type: "text", text: "Continue." }] },
+  ]
+  const transcript = normalizeOpenCodeMessages(raw, 1)
+  const built = buildJevState(transcript, { toolResultPreviewChars: 300 })
+  const plan = buildQuestionPlan(built.state, transcript, built.constraints, built.files)
+  const ids = plan.tools.get("t1")
+  assert.ok(ids)
+  assert.equal(ids.policy, "protect_call")
+  assert.equal(ids.keepCall, undefined)
+  assert.equal(Object.keys(plan.questions).length, 1)
+  const decisions = composeDecisions(
+    transcript,
+    built.state,
+    built.objective,
+    built.constraints,
+    built.files,
+    plan,
+    { [ids.keepResult]: { type: "noul", noul: 0.01 } },
+    composeOptions,
+  )
+  assert.equal(decisions.tools.find((item) => item.toolCallId === "t1").decision, "keep_call_truncate_result")
 })
 
 test("all conversational text is preserved by default", () => {
   const { decide } = buildToolHarness()
-  assert.ok(decide(0.1, 0.1, 0.95))
+  assert.ok(decide(0.1, 0.1))
   const raw = [
     { id: "m0", role: "user", content: [{ type: "text", text: "Keep this exact request." }] },
     { id: "m1", role: "assistant", content: [{ type: "text", text: "Keep this exact explanation." }] },
@@ -408,12 +444,13 @@ test("malformed Jev payload is rejected", async () => {
   assert.throws(() => parseJevResponse(raw, { q: { type: "choice", instructions: "choose", criteria: { a: "A", b: "B" } } }), JevMalformedResponseError)
 })
 
-test("tool-heavy engine prunes stale traces with destructive-action verification", async () => {
+test("tool-heavy engine prunes stale traces in a single Jev request", async () => {
   const raw = await fixture("tool-heavy-session.json")
   const outcome = await compactTranscript(raw, discardAsker, { ...DEFAULT_OPTIONS, preserveRecentMessages: 2, timeoutMs: 1000 })
   assert.equal(outcome.status, "ok")
   assert.ok(outcome.checkpoint.stats.toolsDropped >= 2)
-  assert.ok(outcome.checkpoint.stats.verificationRequests >= 2)
+  assert.equal(outcome.checkpoint.stats.verificationRequests, 0)
+  assert.equal(outcome.checkpoint.stats.jevRequests, 1)
   assert.ok(outcome.checkpoint.stats.semanticRemovedFraction >= DEFAULT_OPTIONS.minReductionRatio)
   assert.equal(outcome.checkpoint.stats.textsDropped, 0)
   assert.equal(outcome.checkpoint.stats.estimatedJevCostUsd, outcome.checkpoint.stats.jevInputTokens / 1_000_000 * 0.042)
@@ -445,31 +482,23 @@ test("keep-everything Jev run safely falls back with no semantic reduction", asy
   assert.equal(outcome.stats.textsDropped, 0)
 })
 
-test("verification evidence that cannot fit the request budget fails toward keep-full", async () => {
+test("compaction never issues a dependent verification request", async () => {
   const raw = await fixture("tool-heavy-session.json")
-  raw.splice(1, 0, {
-    id: "padding",
-    role: "assistant",
-    content: [{ type: "text", text: "word ".repeat(4000) }],
-  })
-  let verificationAnswers = 0
+  const seen = []
   const asker = noulAsker((id) => {
-    if (id === "verify") verificationAnswers += 1
-    return id === "verify" ? 0.95 : 0.05
+    seen.push(id)
+    assert.notEqual(id, "verify")
+    return 0.05
   })
   const outcome = await compactTranscript(raw, asker, {
     ...DEFAULT_OPTIONS,
     preserveRecentMessages: 2,
-    maxRequestTokens: 5000,
     timeoutMs: 1000,
   })
-  assert.equal(outcome.status, "fallback")
-  assert.equal(outcome.reason, "no-semantic-reduction")
-  assert.ok(outcome.stats.jevRequests > 0)
-  assert.equal(outcome.stats.verificationRequests, 0)
-  assert.equal(verificationAnswers, 0)
-  assert.equal(outcome.stats.toolsKeptFull, 2)
-  assert.equal(outcome.stats.toolDecisionDiagnostics.every((item) => item.verification === undefined), true)
+  assert.equal(outcome.status, "ok")
+  assert.equal(outcome.checkpoint.stats.verificationRequests, 0)
+  assert.equal(outcome.checkpoint.stats.jevRequests, 1)
+  assert.equal(seen.length, 4)
 })
 
 test("weak objective with no substantive request falls back before Jev", async () => {
@@ -529,7 +558,7 @@ test("same state and Jev answers produce identical decisions", async () => {
 
 test("history exposes semantic metrics and bounded per-tool diagnostics", () => {
   const stats = {
-    pluginVersion: "0.0.5",
+    pluginVersion: "0.0.6",
     sessionID: "ses_test",
     originalEstimatedTokens: 100000,
     checkpointEstimatedTokens: 20000,
@@ -561,7 +590,7 @@ test("history exposes semantic metrics and bounded per-tool diagnostics", () => 
     redactions: 0,
   }
   const record = makeRunRecord("ok", null, stats, "2026-01-02T00:00:00Z")
-  assert.match(formatRun(record), /historical plugin 0\.0\.5/)
+  assert.match(formatRun(record), /historical plugin 0\.0\.6/)
   assert.match(formatRun(record), /semantic payload 100,000 -> 30,000 chars; removed 70\.0%/)
   assert.match(formatRun(record), /Jev state 70,000 chars \/ 20,000 tokens; fit old-calls-compacted/)
   assert.match(formatRun(record), /t1:read:drop\/call=0\.10\/result=0\.10\/verify=0\.95/)
