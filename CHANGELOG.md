@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+## 0.0.6
+
+Single-pass Jev compaction with deterministic safety policy.
+
+- Removed the destructive-action verification round. A compaction run now evaluates each eligible tool only once; request-budget batching may create multiple API requests, but there is no dependent second Jev pass.
+- Moved destructive eligibility into deterministic code. Unknown, incomplete, pinned, and failed tools keep full evidence; mutation/remote-action tools keep call provenance; only an explicit allowlist of cheap read-only tools may be dropped completely.
+- Lowered the default retention threshold to 0.15, matching the observed probability distribution for old tool calls while keeping equality conservative.
+- Removed `verificationThreshold`, `verificationResultPreviewChars`, and `uncertaintyMargin` from the active configuration surface.
+- Added bounded first-pass batch concurrency with `maxConcurrentRequests` (default 2).
+- Preserved verbatim user/assistant text, chronological state fitting, previous-checkpoint baselines, semantic-reduction acceptance, native OpenCode fallback, redaction, and existing run diagnostics.
+- Kept legacy verification fields readable in historical 0.0.5 run records.
+
+
 - Pinned `@opencode/plugin` to OpenCode 2.0.14 and verified the compaction hook, RPC, TUI, and storage contracts.
 - Displayed the loaded plugin version and per-load hook invocation count/timestamp separately from historical compaction runs in `/jev-status`.
 - Added conventional root entrypoints so OpenCode 2.0.7 can discover all server, TUI, and RPC features when the repository is configured as a local plugin directory.
