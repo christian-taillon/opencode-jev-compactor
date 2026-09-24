@@ -2,20 +2,21 @@ import type {
   ConstraintCandidate,
   FileCandidate,
   NormalizedTranscript,
-  ToolDecisionKind,
 } from "../domain/types.js"
+import { classifyTool, type ToolRetentionPolicy } from "../policy/tool-policy.js"
 import type { JevState } from "../state/build.js"
 import type { JevQuestion, NoulQuestion } from "./types.js"
 
 export interface ToolQuestionIds {
-  keepCall: string
+  policy: Exclude<ToolRetentionPolicy, "pin_full">
+  keepCall?: string
   keepResult: string
 }
 
 export interface QuestionPlan {
   questions: Record<string, JevQuestion>
   tools: Map<string, ToolQuestionIds>
-  /** Kept for adapter compatibility. Text/files/constraints are preserved deterministically in 0.0.5. */
+  /** Kept for adapter compatibility. Text/files/constraints are preserved deterministically. */
   texts: Map<string, never>
   constraints: Map<string, never>
   files: Map<string, never>
@@ -26,9 +27,14 @@ function noul(instructions: string, yes: string, no: string): NoulQuestion {
 }
 
 /**
- * First pass: two independent judgments per tool. Text is not scored for deletion.
- * The state already carries chronology, goal, previous checkpoint baseline, call input,
- * result status/size, and a small result preview.
+ * One Jev decision pass. Application policy determines what may be destroyed:
+ *
+ * - pin_full tools receive no question.
+ * - protect_call tools ask only whether the full result must remain.
+ * - drop_eligible tools ask independent keep-call and keep-result questions.
+ *
+ * All questions share the same chronological state and are batched only when
+ * the request budget requires it.
  */
 export function buildQuestionPlan(
   _state: JevState,
@@ -41,22 +47,28 @@ export function buildQuestionPlan(
 
   let index = 0
   for (const call of transcript.toolCalls) {
-    if (call.pinned || call.result?.pinned === true || !call.result) continue
+    const policy = classifyTool(call)
+    if (policy === "pin_full") continue
+
     const prefix = `tool_${index++}`
-    const ids = {
-      keepCall: `${prefix}_keep_call`,
-      keepResult: `${prefix}_keep_result`,
+    const keepResult = `${prefix}_keep_result`
+    const ids: ToolQuestionIds = { policy, keepResult }
+
+    if (policy === "drop_eligible") {
+      ids.keepCall = `${prefix}_keep_call`
+      questions[ids.keepCall] = noul(
+        `For the current objective in state.goal, should history retain that tool call ${call.id} (${call.toolName}) happened, including its input, because losing that provenance would impair correct continuation or cause meaningful repeated work?`,
+        "The call/input is still necessary for the current objective, an applicable decision or constraint, completed-work provenance, or avoiding meaningful repeated work.",
+        "Knowing this call happened is no longer necessary for correct continuation; if needed, this cheap read-only operation can be repeated.",
+      )
     }
-    questions[ids.keepCall] = noul(
-      `Should the history retain that tool call ${call.id} (${call.toolName}) happened, including its input, because losing that provenance could impair the current objective or cause meaningful repeated work?`,
-      "The fact/input of this call remains useful for continuation, completed-work memory, provenance, or avoiding repeated work.",
-      "Knowing this call happened no longer has meaningful value for correct continuation.",
+
+    questions[keepResult] = noul(
+      `For the current objective in state.goal, does the exact full output of tool call ${call.id} (${call.toolName}) still need to remain available verbatim, rather than keeping a short exact prefix and rerunning/re-reading the tool if needed?`,
+      "Exact result content is still necessary, including precise unresolved evidence, identifiers, values, or content that cannot safely be recovered for the current objective.",
+      "The exact full result is no longer necessary; a short retained prefix or repeating the operation would be sufficient if the content becomes needed again.",
     )
-    questions[ids.keepResult] = noul(
-      `Does the exact full output of tool call ${call.id} (${call.toolName}) still need to remain available verbatim for correct continuation, rather than being truncated or recovered by rerunning/re-reading if needed?`,
-      "Exact result content is still needed, including precise evidence, unresolved diagnostics, values, identifiers, or output that cannot safely be discarded.",
-      "The exact full result is no longer needed; a short retained prefix or rerunning/re-reading the tool would be sufficient if needed.",
-    )
+
     tools.set(call.id, ids)
   }
 
@@ -67,19 +79,4 @@ export function buildQuestionPlan(
     constraints: new Map<string, never>(),
     files: new Map<string, never>(),
   }
-}
-
-export function verificationQuestion(
-  toolCallId: string,
-  toolName: string,
-  proposed: Exclude<ToolDecisionKind, "keep_full">,
-): NoulQuestion {
-  const action = proposed === "drop"
-    ? "drop both the tool call and its result"
-    : "keep the tool call but truncate its result to a short exact prefix"
-  return noul(
-    `Given the richer candidate evidence in candidateTool, is it safe to ${action} for tool call ${toolCallId} (${toolName}) without losing information needed to continue correctly, hiding an unresolved blocker, forgetting completed work, or causing meaningful repeated work?`,
-    "The proposed destructive action is safe; the remaining history is sufficient for correct continuation.",
-    "The proposed action risks losing useful context; retain the complete tool call and result instead.",
-  )
 }
