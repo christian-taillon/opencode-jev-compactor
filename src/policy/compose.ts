@@ -16,8 +16,6 @@ import type { JevState } from "../state/build.js"
 
 export interface ComposeOptions {
   keepThreshold: number
-  verificationThreshold: number
-  uncertaintyMargin: number
 }
 
 function answer(
@@ -29,52 +27,39 @@ function answer(
   return value
 }
 
-function uncertain(probability: number, margin: number): boolean {
-  return Math.abs(probability - 0.5) < margin
-}
-
 function composeTool(
   callId: string,
-  pinned: boolean,
   plan: QuestionPlan,
   answers: Record<string, JevAnswer>,
   options: ComposeOptions,
-  verification: ReadonlyMap<string, number> | undefined,
 ): ToolDecision {
-  if (pinned) return { toolCallId: callId, decision: "keep_full", reason: "pinned" }
   const ids = plan.tools.get(callId)
-  if (!ids) return { toolCallId: callId, decision: "keep_full", reason: "uncertain" }
+  if (!ids) return { toolCallId: callId, decision: "keep_full", reason: "policy" }
 
-  const keepCall = answer(answers, ids.keepCall).noul
   const keepResult = answer(answers, ids.keepResult).noul
-  const verify = verification?.get(callId)
+  const keepCall = ids.keepCall ? answer(answers, ids.keepCall).noul : undefined
   const signals: ToolSignals = {
-    keepCall,
     keepResult,
-    ...(verify !== undefined ? { verification: verify } : {}),
+    ...(keepCall !== undefined ? { keepCall } : {}),
   }
 
-  // Exact-result uncertainty always fails toward full retention.
-  if (uncertain(keepResult, options.uncertaintyMargin) || keepResult >= options.keepThreshold) {
-    return { toolCallId: callId, decision: "keep_full", reason: uncertain(keepResult, options.uncertaintyMargin) ? "uncertain" : "jev", signals }
-  }
-  if (uncertain(keepCall, options.uncertaintyMargin)) {
-    return { toolCallId: callId, decision: "keep_full", reason: "uncertain", signals }
+  // Equality keeps. Destructive actions require a probability below threshold.
+  if (keepResult >= options.keepThreshold) {
+    return { toolCallId: callId, decision: "keep_full", reason: "jev", signals }
   }
 
-  const proposed = keepCall >= options.keepThreshold ? "keep_call_truncate_result" : "drop"
-  // A first-pass proposal is intentionally provisional. Engine code verifies every
-  // destructive action with richer candidate evidence before installing it.
-  if (verify === undefined) {
-    return verification
-      ? { toolCallId: callId, decision: "keep_full", reason: "uncertain", signals }
-      : { toolCallId: callId, decision: proposed, reason: "jev", signals }
+  // Application policy has already decided provenance for this tool class stays.
+  if (ids.policy === "protect_call") {
+    return { toolCallId: callId, decision: "keep_call_truncate_result", reason: "jev", signals }
   }
 
-  if (uncertain(verify, options.uncertaintyMargin) || verify < options.verificationThreshold) {
-    return { toolCallId: callId, decision: "keep_full", reason: "uncertain", signals }
+  if (keepCall === undefined) {
+    return { toolCallId: callId, decision: "keep_full", reason: "policy", signals }
   }
-  return { toolCallId: callId, decision: proposed, reason: "jev", signals }
+  if (keepCall >= options.keepThreshold) {
+    return { toolCallId: callId, decision: "keep_call_truncate_result", reason: "jev", signals }
+  }
+  return { toolCallId: callId, decision: "drop", reason: "jev", signals }
 }
 
 export function composeDecisions(
@@ -86,20 +71,15 @@ export function composeDecisions(
   plan: QuestionPlan,
   answers: Record<string, JevAnswer>,
   options: ComposeOptions,
-  verification?: ReadonlyMap<string, number>,
 ): CompactionDecisions {
   const tools = transcript.toolCalls.map((call) => composeTool(
     call.id,
-    call.pinned || call.result?.pinned === true,
     plan,
     answers,
     options,
-    verification,
   ))
 
-  // 0.0.5 preserves user/assistant text by default. Jev prunes high-volume tool
-  // traces while exact conversational intent, constraints, and course corrections
-  // remain verbatim.
+  // Conversational intent, constraints, and course corrections stay verbatim.
   const texts: TextDecision[] = transcript.textBlocks
     .filter((block) => block.checkpointEligible)
     .map((block) => ({
