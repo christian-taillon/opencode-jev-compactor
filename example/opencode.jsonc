@@ -16,19 +16,17 @@
         "enabled": true,
         "model": "jev-latest",
 
-        "keepThreshold": 0.50,
-        "verificationThreshold": 0.80,
-        "uncertaintyMargin": 0.12,
+        "keepThreshold": 0.15,
 
         "preserveRecentMessages": 6,
         "minReductionRatio": 0.15,
 
         "toolResultPreviewChars": 300,
-        "verificationResultPreviewChars": 8000,
         "truncateHeadChars": 600,
         "maxStateChars": 100000,
         "maxStateTokens": 24000,
         "maxRequestTokens": 30000,
+        "maxConcurrentRequests": 2,
         "timeoutMs": 6000,
 
         "enableCompareTool": true,
