@@ -2,18 +2,15 @@ export interface PluginOptions {
   enabled: boolean
   model: string
   keepThreshold: number
-  verificationThreshold: number
-  uncertaintyMargin: number
   preserveRecentMessages: number
   minReductionRatio: number
-  /** Tiny first-pass preview sent with the chronological state. */
+  /** Small result preview included in the single-pass chronological Jev state. */
   toolResultPreviewChars: number
-  /** Richer result preview sent only when verifying a destructive candidate. */
-  verificationResultPreviewChars: number
   truncateHeadChars: number
   maxStateChars: number
   maxStateTokens: number
   maxRequestTokens: number
+  maxConcurrentRequests: number
   timeoutMs: number
   enableCompareTool: boolean
   historyLimit: number
@@ -24,17 +21,15 @@ export interface PluginOptions {
 export const DEFAULT_OPTIONS: PluginOptions = {
   enabled: true,
   model: "jev-latest",
-  keepThreshold: 0.50,
-  verificationThreshold: 0.80,
-  uncertaintyMargin: 0.12,
+  keepThreshold: 0.15,
   preserveRecentMessages: 6,
   minReductionRatio: 0.15,
   toolResultPreviewChars: 300,
-  verificationResultPreviewChars: 8_000,
   truncateHeadChars: 600,
   maxStateChars: 100_000,
   maxStateTokens: 24_000,
   maxRequestTokens: 30_000,
+  maxConcurrentRequests: 2,
   timeoutMs: 6_000,
   enableCompareTool: true,
   historyLimit: 10,
@@ -68,13 +63,6 @@ export function parseOptions(input: Record<string, unknown>): PluginOptions {
     enabled: boolOption(input.enabled, DEFAULT_OPTIONS.enabled),
     model: stringOption(input.model, DEFAULT_OPTIONS.model),
     keepThreshold: numberOption(input.keepThreshold, DEFAULT_OPTIONS.keepThreshold, 0, 1),
-    verificationThreshold: numberOption(
-      input.verificationThreshold,
-      DEFAULT_OPTIONS.verificationThreshold,
-      0.5,
-      1,
-    ),
-    uncertaintyMargin: numberOption(input.uncertaintyMargin, DEFAULT_OPTIONS.uncertaintyMargin, 0, 0.49),
     preserveRecentMessages: numberOption(
       input.preserveRecentMessages,
       DEFAULT_OPTIONS.preserveRecentMessages,
@@ -95,13 +83,6 @@ export function parseOptions(input: Record<string, unknown>): PluginOptions {
       4_000,
       true,
     ),
-    verificationResultPreviewChars: numberOption(
-      input.verificationResultPreviewChars,
-      DEFAULT_OPTIONS.verificationResultPreviewChars,
-      200,
-      30_000,
-      true,
-    ),
     truncateHeadChars: numberOption(
       input.truncateHeadChars,
       DEFAULT_OPTIONS.truncateHeadChars,
@@ -116,6 +97,13 @@ export function parseOptions(input: Record<string, unknown>): PluginOptions {
       DEFAULT_OPTIONS.maxRequestTokens,
       5_000,
       31_500,
+      true,
+    ),
+    maxConcurrentRequests: numberOption(
+      input.maxConcurrentRequests,
+      DEFAULT_OPTIONS.maxConcurrentRequests,
+      1,
+      8,
       true,
     ),
     timeoutMs: numberOption(input.timeoutMs, DEFAULT_OPTIONS.timeoutMs, 250, 30_000, true),
