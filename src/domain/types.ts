@@ -171,6 +171,10 @@ export interface CompactionStats {
   semanticPayloadCharsBefore: number
   semanticPayloadCharsAfter: number
   semanticRemovedFraction: number
+  /** Deterministic upper bound before Jev runs. */
+  maxPrunablePayloadChars: number
+  maxPrunableFraction: number
+  eligiblePrunableTools: number
   fittedStateEstimatedTokens: number
   fittedStateChars: number
   fitStage: string
