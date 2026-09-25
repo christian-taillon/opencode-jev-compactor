@@ -107,36 +107,16 @@ export type MessageCategory =
 export type ToolDecisionKind = "keep_full" | "keep_call_truncate_result" | "drop"
 
 export interface ToolSignals {
-  keepCall: number
-  exactEvidence: number
-  unresolvedBlocker: number
-  completedWork: number
-  repeatWorkRisk: number
-  superseded: number
-  truncateSafe: number
-  safeToDiscard: number
-  relevance: number
-  relevanceConfidence: number
-  choice: ToolDecisionKind
-  choiceConfidence: number
-  choiceProbabilities: Record<string, number>
-}
-
-export interface TextSignals {
-  keep: number
-  safeToDiscard: number
-  superseded: number
-  relevance: number
-  relevanceConfidence: number
-  category: MessageCategory
-  categoryConfidence: number
-  categoryProbabilities: Record<string, number>
+  keepCall?: number
+  keepResult: number
+  /** Legacy 0.0.5 field retained so historical diagnostics remain readable. */
+  verification?: number
 }
 
 export interface ToolDecision {
   toolCallId: string
   decision: ToolDecisionKind
-  reason: "pinned" | "jev" | "uncertain"
+  reason: "pinned" | "policy" | "jev" | "uncertain"
   signals?: ToolSignals
 }
 
@@ -145,7 +125,6 @@ export interface TextDecision {
   keep: boolean
   category: MessageCategory
   reason: "pinned" | "unknown-part" | "newest-user" | "jev" | "uncertain" | "retained-fact"
-  signals?: TextSignals
 }
 
 export interface ConstraintDecision {
@@ -169,15 +148,39 @@ export interface CompactionDecisions {
   files: FileDecision[]
 }
 
+export interface ToolDecisionDiagnostic {
+  toolCallId: string
+  toolName: string
+  action: ToolDecisionKind
+  reason: ToolDecision["reason"]
+  keepCall?: number
+  keepResult?: number
+  /** Legacy 0.0.5 field retained so historical records remain readable. */
+  verification?: number
+}
+
 export interface CompactionStats {
+  sessionID?: string
+  pluginVersion?: string
   originalEstimatedTokens: number
   checkpointEstimatedTokens: number
+  /** Representation-only size difference retained for diagnostics. Never authorizes compaction. */
   removedFraction: number
   remainingRatio: number
+  /** Payload accounting over text/tool content, independent of JSON/Markdown serialization. */
+  semanticPayloadCharsBefore: number
+  semanticPayloadCharsAfter: number
+  semanticRemovedFraction: number
+  /** Deterministic upper bound before Jev runs. */
+  maxPrunablePayloadChars: number
+  maxPrunableFraction: number
+  eligiblePrunableTools: number
   fittedStateEstimatedTokens: number
   fittedStateChars: number
   fitStage: string
   jevRequests: number
+  /** Legacy metric. Single-pass 0.0.6 runs always record zero. */
+  verificationRequests: number
   jevInputTokens: number
   jevOutputTokens: number
   jevLatencyMs: number
@@ -190,6 +193,7 @@ export interface CompactionStats {
   textsKept: number
   textsDropped: number
   semanticReductionActions: number
+  toolDecisionDiagnostics: ToolDecisionDiagnostic[]
   redactions: number
   fallbackReason?: string
 }
