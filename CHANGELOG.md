@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+## 0.0.7
+
+Maturity and cost-control improvements for the single-pass design.
+
+- Added a deterministic pruning-capacity preflight before Jev. If the maximum possible policy-approved reduction cannot reach `minReductionRatio`, the plugin falls through to native OpenCode compaction without spending a Jev request.
+- Skip Jev questions for protected-call results that are already at or below `truncateHeadChars`, because truncation would be a no-op.
+- Added maximum-prunable payload, percentage, and eligible-tool diagnostics to run history.
+- Added GitHub Actions CI for install, typecheck, and tests.
+- Fixed the displayed Jev cost prefix in detailed run diagnostics.
+- Kept the one-pass rule unchanged: request-budget batching may create multiple independent API requests, but no Jev answer triggers a dependent second judgment.
+
 ## 0.0.6
 
 Single-pass Jev compaction with deterministic safety policy.
