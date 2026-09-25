@@ -160,7 +160,7 @@ export default Plugin.define({
               plugin: "opencode.jev-compaction",
               version: PLUGIN_VERSION,
               model: options.model,
-              policy: "single-pass-deterministic-tool-policy-v5",
+              policy: "single-pass-deterministic-tool-policy-v6",
               stats,
             },
           }
