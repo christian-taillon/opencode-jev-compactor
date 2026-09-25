@@ -8,7 +8,7 @@ If the plugin cannot produce a useful checkpoint safely, it leaves `event.result
 
 ## Compatibility
 
-Version `0.0.6` targets **OpenCode 2.0.14** and pins `@opencode/plugin` to `2.0.14`.
+Version `0.0.7` targets **OpenCode 2.0.14** and pins `@opencode/plugin` to `2.0.14`.
 
 After changing OpenCode or the plugin SDK, run:
 
@@ -18,7 +18,7 @@ corepack pnpm run typecheck
 corepack pnpm test
 ```
 
-## 0.0.6 design
+## 0.0.7 design
 
 The objective is:
 
@@ -87,6 +87,14 @@ Jev receives an ordered projection with the resolved current objective, previous
 The local transcript is not changed while fitting the Jev state.
 
 When needed, fitting progressively shortens tool inputs, abridges old text, collapses old unpinned text, compacts old tool traces, removes old call-less entries from the Jev-only state, and merges adjacent compacted call runs.
+
+### Deterministic pruning-capacity preflight
+
+Before Jev is called, the plugin computes the maximum semantic payload that the deterministic tool policy could possibly remove.
+
+If even the best possible keep/truncate/drop outcome cannot satisfy `minReductionRatio`, the plugin immediately falls through to native OpenCode compaction with `insufficient-prunable-payload`. Protected-call results that are already shorter than `truncateHeadChars` are also excluded from Jev questions because truncating them would do nothing.
+
+This avoids spending Jev tokens on text-heavy sessions or tool traces that cannot produce an acceptable custom checkpoint.
 
 ### Semantic reduction gate
 
@@ -249,7 +257,7 @@ OpenCode then uses normal compaction.
 
 `/jev-status` reports the loaded plugin instance, OpenCode Location, compaction hook/request counters, last historical run, semantic reduction, Jev request count/input tokens/latency/cost, and bounded per-tool decisions.
 
-Historical 0.0.5 records can still display their old verification probabilities, but 0.0.6 never generates verification requests.
+Historical 0.0.5 records can still display their old verification probabilities. 0.0.7 never generates verification requests and also reports the deterministic maximum-prunable payload before Jev runs.
 
 ## Privacy
 
