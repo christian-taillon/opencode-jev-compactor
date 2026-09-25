@@ -13,6 +13,10 @@ export interface ToolQuestionIds {
   keepResult: string
 }
 
+export interface QuestionPlanOptions {
+  truncateHeadChars?: number
+}
+
 export interface QuestionPlan {
   questions: Record<string, JevQuestion>
   tools: Map<string, ToolQuestionIds>
@@ -41,6 +45,7 @@ export function buildQuestionPlan(
   transcript: NormalizedTranscript,
   _constraints: ConstraintCandidate[],
   _files: FileCandidate[],
+  options: QuestionPlanOptions = {},
 ): QuestionPlan {
   const questions: Record<string, JevQuestion> = {}
   const tools = new Map<string, ToolQuestionIds>()
@@ -49,6 +54,10 @@ export function buildQuestionPlan(
   for (const call of transcript.toolCalls) {
     const policy = classifyTool(call)
     if (policy === "pin_full") continue
+    if (
+      policy === "protect_call" &&
+      (call.result?.text.length ?? 0) <= Math.max(0, options.truncateHeadChars ?? 0)
+    ) continue
 
     const prefix = `tool_${index++}`
     const keepResult = `${prefix}_keep_result`
