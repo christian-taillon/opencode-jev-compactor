@@ -10,7 +10,7 @@ import { redactSecrets } from "../.test-dist/src/state/redact.js"
 import { buildQuestionPlan } from "../.test-dist/src/jev/questions.js"
 import { composeDecisions } from "../.test-dist/src/policy/compose.js"
 import { classifyTool } from "../.test-dist/src/policy/tool-policy.js"
-import { reductionGate, semanticPayloadReduction } from "../.test-dist/src/policy/reduction.js"
+import { prunablePayloadCapacity, reductionGate, semanticPayloadReduction } from "../.test-dist/src/policy/reduction.js"
 import { assembleCheckpoint } from "../.test-dist/src/transcript/checkpoint.js"
 import { parseJevResponse, JevMalformedResponseError } from "../.test-dist/src/jev/parse.js"
 import { compactTranscript } from "../.test-dist/src/compaction/engine.js"
@@ -384,6 +384,26 @@ test("protected-call tools ask only result retention and can never drop provenan
   assert.equal(decisions.tools.find((item) => item.toolCallId === "t1").decision, "keep_call_truncate_result")
 })
 
+test("protected-call results at or below the retained prefix are not sent to Jev", () => {
+  const raw = [
+    { id: "m0", role: "user", content: [{ type: "text", text: "Run the tests." }] },
+    { id: "m1", role: "assistant", content: [{ type: "tool-call", toolCallId: "t1", toolName: "shell", input: { command: "pnpm test" } }] },
+    { id: "m2", role: "tool", content: [{ type: "tool-result", toolCallId: "t1", output: "short output" }] },
+    { id: "m3", role: "user", content: [{ type: "text", text: "Continue." }] },
+  ]
+  const transcript = normalizeOpenCodeMessages(raw, 1)
+  const built = buildJevState(transcript, { toolResultPreviewChars: 300 })
+  const plan = buildQuestionPlan(
+    built.state,
+    transcript,
+    built.constraints,
+    built.files,
+    { truncateHeadChars: 600 },
+  )
+  assert.equal(plan.tools.size, 0)
+  assert.equal(Object.keys(plan.questions).length, 0)
+})
+
 test("all conversational text is preserved by default", () => {
   const { decide } = buildToolHarness()
   assert.ok(decide(0.1, 0.1))
@@ -437,6 +457,46 @@ test("semantic payload gate ignores JSON-to-Markdown representation changes", ()
   assert.ok(semantic.removedFraction > 0.9)
   assert.equal(semantic.sufficient, true)
   assert.equal(reductionGate(1000, 900, 0.15).sufficient, false)
+})
+
+test("pruning capacity is a deterministic upper bound", () => {
+  const raw = [
+    { id: "m0", role: "user", content: [{ type: "text", text: "Goal" }] },
+    { id: "m1", role: "assistant", content: [
+      { type: "text", text: "context".repeat(200) },
+      { type: "tool-call", toolCallId: "t1", toolName: "read", input: { path: "x" } },
+    ] },
+    { id: "m2", role: "tool", content: [{ type: "tool-result", toolCallId: "t1", output: "x".repeat(1000) }] },
+  ]
+  const transcript = normalizeOpenCodeMessages(raw, 0)
+  const capacity = prunablePayloadCapacity(transcript, 600, 0.15)
+  assert.equal(capacity.eligibleTools, 1)
+  assert.equal(capacity.removableChars, transcript.toolCalls[0].inputText.length + 1000)
+  assert.ok(capacity.removableFraction > 0)
+})
+
+test("engine skips Jev when even maximum eligible pruning cannot clear the semantic gate", async () => {
+  const raw = [
+    { id: "u0", role: "user", content: [{ type: "text", text: "Inspect the project and continue." }] },
+    { id: "a0", role: "assistant", content: [
+      { type: "text", text: "context ".repeat(3000) },
+      { type: "tool-call", toolCallId: "t1", toolName: "read", input: { path: "README.md" } },
+    ] },
+    { id: "t0", role: "tool", content: [{ type: "tool-result", toolCallId: "t1", output: "small result".repeat(20) }] },
+    { id: "u1", role: "user", content: [{ type: "text", text: "Continue with that objective." }] },
+  ]
+  let calls = 0
+  const outcome = await compactTranscript(
+    raw,
+    { async ask() { calls += 1; throw new Error("Jev must not run") } },
+    { ...DEFAULT_OPTIONS, preserveRecentMessages: 1, timeoutMs: 1000 },
+  )
+  assert.equal(outcome.status, "fallback")
+  assert.equal(outcome.reason, "insufficient-prunable-payload")
+  assert.equal(calls, 0)
+  assert.equal(outcome.stats.jevRequests, 0)
+  assert.ok(outcome.stats.maxPrunableFraction < DEFAULT_OPTIONS.minReductionRatio)
+  assert.equal(outcome.stats.eligiblePrunableTools, 1)
 })
 
 test("malformed Jev payload is rejected", async () => {
@@ -567,6 +627,9 @@ test("history exposes semantic metrics and bounded per-tool diagnostics", () => 
     semanticPayloadCharsBefore: 100000,
     semanticPayloadCharsAfter: 30000,
     semanticRemovedFraction: 0.7,
+    maxPrunablePayloadChars: 80000,
+    maxPrunableFraction: 0.8,
+    eligiblePrunableTools: 2,
     fittedStateEstimatedTokens: 20000,
     fittedStateChars: 70000,
     fitStage: "old-calls-compacted",
@@ -592,6 +655,7 @@ test("history exposes semantic metrics and bounded per-tool diagnostics", () => 
   const record = makeRunRecord("ok", null, stats, "2026-01-02T00:00:00Z")
   assert.match(formatRun(record), /historical plugin 0\.0\.6/)
   assert.match(formatRun(record), /semantic payload 100,000 -> 30,000 chars; removed 70\.0%/)
+  assert.match(formatRun(record), /max prunable 80,000 chars \/ 80\.0% across 2 tool\(s\)/)
   assert.match(formatRun(record), /Jev state 70,000 chars \/ 20,000 tokens; fit old-calls-compacted/)
   assert.match(formatRun(record), /t1:read:drop\/call=0\.10\/result=0\.10\/verify=0\.95/)
 
@@ -602,6 +666,9 @@ test("history exposes semantic metrics and bounded per-tool diagnostics", () => 
     "semanticPayloadCharsBefore",
     "semanticPayloadCharsAfter",
     "semanticRemovedFraction",
+    "maxPrunablePayloadChars",
+    "maxPrunableFraction",
+    "eligiblePrunableTools",
     "verificationRequests",
     "toolDecisionDiagnostics",
   ]) delete legacyStats[key]
