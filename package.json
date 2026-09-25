@@ -1,6 +1,6 @@
 {
   "name": "opencode-jev-compaction",
-  "version": "0.0.6",
+  "version": "0.0.7",
   "description": "Quality-first OpenCode v2 checkpoint compaction using TypeSafe Jev structured decisions.",
   "type": "module",
   "license": "MIT",
