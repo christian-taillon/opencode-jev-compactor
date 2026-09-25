@@ -9,7 +9,12 @@ import { buildQuestionPlan } from "../jev/questions.js"
 import type { JevAnswer, JevBatchResult, JevQuestion } from "../jev/types.js"
 import { toJson } from "../observability/json.js"
 import { composeDecisions } from "../policy/compose.js"
-import { reductionGate, semanticPayloadChars, semanticPayloadReduction } from "../policy/reduction.js"
+import {
+  prunablePayloadCapacity,
+  reductionGate,
+  semanticPayloadChars,
+  semanticPayloadReduction,
+} from "../policy/reduction.js"
 import type { PluginOptions } from "../plugin/options.js"
 import { buildJevState } from "../state/build.js"
 import { estimateJsonTokens, estimateTokens } from "../state/estimate.js"
@@ -34,6 +39,9 @@ export function initialCompactionStats(rawMessages: readonly unknown[], sessionI
     semanticPayloadCharsBefore: 0,
     semanticPayloadCharsAfter: 0,
     semanticRemovedFraction: 0,
+    maxPrunablePayloadChars: 0,
+    maxPrunableFraction: 0,
+    eligiblePrunableTools: 0,
     fittedStateEstimatedTokens: 0,
     fittedStateChars: 0,
     fitStage: "none",
@@ -176,6 +184,17 @@ export async function compactTranscript(
     stats.redactions = built.redactions
     if (!built.objective) return fallback(stats, "weak-objective-unresolved")
 
+    const capacity = prunablePayloadCapacity(
+      transcript,
+      options.truncateHeadChars,
+      options.minReductionRatio,
+    )
+    stats.maxPrunablePayloadChars = capacity.removableChars
+    stats.maxPrunableFraction = capacity.removableFraction
+    stats.eligiblePrunableTools = capacity.eligibleTools
+    if (capacity.eligibleTools === 0) return fallback(stats, "nothing-prunable")
+    if (!capacity.sufficient) return fallback(stats, "insufficient-prunable-payload")
+
     const fit = fitState(built.state, { maxStateChars: options.maxStateChars, maxStateTokens: options.maxStateTokens })
     stats.fittedStateChars = fit.chars
     stats.fittedStateEstimatedTokens = fit.tokens
@@ -183,7 +202,9 @@ export async function compactTranscript(
     if (!fit.ok) return fallback(stats, fit.reason)
     fitted = fit
 
-    plan = buildQuestionPlan(fitted.state, transcript, built.constraints, built.files)
+    plan = buildQuestionPlan(fitted.state, transcript, built.constraints, built.files, {
+      truncateHeadChars: options.truncateHeadChars,
+    })
     stats.toolsScored = plan.tools.size
     stats.textsScored = 0
     if (plan.tools.size === 0) return fallback(stats, "nothing-prunable")
