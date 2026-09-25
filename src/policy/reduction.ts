@@ -1,4 +1,5 @@
 import type { CompactionDecisions, NormalizedTranscript } from "../domain/types.js"
+import { classifyTool } from "./tool-policy.js"
 
 export interface ReductionResult {
   originalTokens: number
@@ -15,6 +16,14 @@ export interface SemanticPayloadReduction {
   sufficient: boolean
 }
 
+export interface PrunablePayloadCapacity {
+  beforeChars: number
+  removableChars: number
+  removableFraction: number
+  eligibleTools: number
+  sufficient: boolean
+}
+
 export function semanticPayloadChars(transcript: NormalizedTranscript): number {
   let chars = 0
   for (const block of transcript.textBlocks) {
@@ -23,6 +32,56 @@ export function semanticPayloadChars(transcript: NormalizedTranscript): number {
   for (const attachment of transcript.attachments) chars += attachment.descriptor.length
   for (const call of transcript.toolCalls) chars += call.inputText.length + (call.result?.text.length ?? 0)
   return chars
+}
+
+/**
+ * Computes a deterministic upper bound on what the active tool policy could
+ * remove before spending a Jev request.
+ *
+ * - pin_full tools cannot remove semantic payload.
+ * - protect_call tools may only remove the result tail after truncateHeadChars.
+ * - drop_eligible tools may remove call input plus result.
+ *
+ * If this upper bound cannot clear minReductionRatio, no possible Jev answer can
+ * make the custom checkpoint acceptable, so native OpenCode compaction should run.
+ */
+export function prunablePayloadCapacity(
+  transcript: NormalizedTranscript,
+  truncateHeadChars: number,
+  minReductionRatio: number,
+): PrunablePayloadCapacity {
+  const beforeChars = semanticPayloadChars(transcript)
+  const retainedResultHead = Math.max(0, truncateHeadChars)
+  let removableChars = 0
+  let eligibleTools = 0
+
+  for (const call of transcript.toolCalls) {
+    const policy = classifyTool(call)
+    if (policy === "pin_full") continue
+
+    const resultChars = call.result?.text.length ?? 0
+    if (policy === "protect_call") {
+      const removable = Math.max(0, resultChars - retainedResultHead)
+      if (removable <= 0) continue
+      eligibleTools += 1
+      removableChars += removable
+      continue
+    }
+
+    const removable = call.inputText.length + resultChars
+    if (removable <= 0) continue
+    eligibleTools += 1
+    removableChars += removable
+  }
+
+  const removableFraction = beforeChars === 0 ? 0 : Math.min(1, removableChars / beforeChars)
+  return {
+    beforeChars,
+    removableChars,
+    removableFraction,
+    eligibleTools,
+    sufficient: removableFraction >= minReductionRatio,
+  }
 }
 
 /** Representation-level diagnostic retained for observability and legacy tests. */
@@ -43,8 +102,7 @@ export function reductionGate(originalTokens: number, compactedTokens: number, m
 
 /**
  * Measures actual transcript payload retained by policy rather than comparing
- * OpenCode JSON serialization with generated Markdown. This is the acceptance
- * metric used by 0.0.5.
+ * OpenCode JSON serialization with generated Markdown.
  */
 export function semanticPayloadReduction(
   transcript: NormalizedTranscript,
