@@ -34,11 +34,15 @@ function decisionLines(stats: CompactionStats): string[] {
 
 export function formatRun(record: CompactionRunRecord): string {
   const stats = record.stats
+  const delivery = stats.delivery ?? "legacy"
+  const sizeLine = delivery === "guided-native"
+    ? `context ${stats.originalEstimatedTokens.toLocaleString()} tokens; deterministic candidate ${stats.checkpointEstimatedTokens.toLocaleString()} tokens; native guidance ${(stats.nativeGuidanceChars ?? 0).toLocaleString()} chars / ${stats.nativeGuidanceItems ?? 0} item(s)`
+    : `context ${stats.originalEstimatedTokens.toLocaleString()} -> checkpoint ${stats.checkpointEstimatedTokens.toLocaleString()} tokens; serialized reduction ${((stats.removedFraction ?? 0) * 100).toFixed(1)}%`
   const lines = [
     `${record.at}  ${record.status}${record.reason ? ` (${record.reason})` : ""}`,
-    `session ${stats.sessionID ?? "unknown"}; historical plugin ${stats.pluginVersion ?? "pre-0.0.5"}`,
-    `context ${stats.originalEstimatedTokens.toLocaleString()} -> checkpoint ${stats.checkpointEstimatedTokens.toLocaleString()} tokens; serialized reduction ${((stats.removedFraction ?? 0) * 100).toFixed(1)}%`,
-    `semantic payload ${(stats.semanticPayloadCharsBefore ?? 0).toLocaleString()} -> ${(stats.semanticPayloadCharsAfter ?? 0).toLocaleString()} chars; removed ${((stats.semanticRemovedFraction ?? 0) * 100).toFixed(1)}%`,
+    `session ${stats.sessionID ?? "unknown"}; historical plugin ${stats.pluginVersion ?? "pre-0.0.5"}; delivery ${delivery}`,
+    sizeLine,
+    `semantic payload ${(stats.semanticPayloadCharsBefore ?? 0).toLocaleString()} -> ${(stats.semanticPayloadCharsAfter ?? 0).toLocaleString()} chars; removable by Jev policy ${((stats.semanticRemovedFraction ?? 0) * 100).toFixed(1)}%`,
     `max prunable ${(stats.maxPrunablePayloadChars ?? 0).toLocaleString()} chars / ${((stats.maxPrunableFraction ?? 0) * 100).toFixed(1)}% across ${stats.eligiblePrunableTools ?? 0} tool(s)`,
     `Jev state ${(stats.fittedStateChars ?? 0).toLocaleString()} chars / ${(stats.fittedStateEstimatedTokens ?? 0).toLocaleString()} tokens; fit ${stats.fitStage ?? "unknown"}`,
     `semantic actions ${stats.semanticReductionActions ?? 0}; tools full/truncated/dropped ${stats.toolsKeptFull}/${stats.toolsTruncated}/${stats.toolsDropped}; text kept/dropped ${stats.textsKept}/${stats.textsDropped}`,
