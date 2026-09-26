@@ -159,11 +159,17 @@ export interface ToolDecisionDiagnostic {
   verification?: number
 }
 
+export type CompactionDelivery = "guided-native" | "deterministic"
+
 export interface CompactionStats {
   sessionID?: string
   pluginVersion?: string
+  delivery?: CompactionDelivery
   originalEstimatedTokens: number
   checkpointEstimatedTokens: number
+  /** Guided-native appends a small instruction while leaving the historical prefix untouched. */
+  nativeGuidanceChars: number
+  nativeGuidanceItems: number
   /** Representation-only size difference retained for diagnostics. Never authorizes compaction. */
   removedFraction: number
   remainingRatio: number
