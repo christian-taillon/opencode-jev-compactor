@@ -6,6 +6,7 @@ interface JevStatus {
   configuredEnabled: boolean
   overrideActive: boolean
   apiKeyConfigured: boolean
+  delivery: "guided-native" | "deterministic"
   model: string
   pluginVersion: string
   processPid: number
@@ -31,6 +32,7 @@ function parseStatus(value: unknown): JevStatus {
     typeof record.configuredEnabled !== "boolean" ||
     typeof record.overrideActive !== "boolean" ||
     typeof record.apiKeyConfigured !== "boolean" ||
+    (record.delivery !== "guided-native" && record.delivery !== "deterministic") ||
     typeof record.model !== "string" ||
     typeof record.pluginVersion !== "string" ||
     !Number.isInteger(record.processPid) ||
@@ -77,6 +79,7 @@ export default Plugin.define({
                     title: `Jev Compaction: ${status.enabled ? "ON" : "OFF"}`,
                     message: [
                       `Model: ${status.model}`,
+                      `Delivery: ${status.delivery}`,
                       `Loaded plugin: ${status.pluginVersion}`,
                       `Process PID: ${status.processPid}`,
                       `Plugin instance: ${status.instanceId}`,
