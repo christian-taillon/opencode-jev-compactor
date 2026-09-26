@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+## 0.0.8
+
+Cache-friendly guided native compaction.
+
+- Changed the default delivery mode to `guided-native`: Jev still makes one structured decision pass, but the plugin no longer rewrites historical messages before OpenCode's frontier-model compaction request.
+- Append one chronological system guidance message after the existing transcript, then leave `event.result` unset so OpenCode writes the final structured summary.
+- Preserve the existing request prefix byte-for-byte up to the appended guidance message, allowing provider prompt caching to keep matching the historical prefix where the provider supports prefix caching.
+- Guidance contains only sanitized tool IDs/names and coarse stale/provenance actions. Raw tool inputs/results are never copied into the guidance.
+- Retained `delivery: "deterministic"` as an A/B mode that installs the plugin's exact checkpoint through `event.result` and skips the frontier summary request.
+- Added delivery mode and guided-native guidance size/item metrics to `/jev-status` history.
+- Continue computing the deterministic candidate checkpoint in guided-native mode for comparison diagnostics, without installing it.
+- Documented a three-way local benchmark: native OpenCode, Jev guided-native, and Jev deterministic.
+
 ## 0.0.7
 
 Maturity and cost-control improvements for the single-pass design.
