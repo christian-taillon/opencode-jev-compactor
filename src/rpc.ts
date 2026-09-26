@@ -14,6 +14,7 @@ const statusOutput = {
     configuredEnabled: { type: "boolean" as const },
     overrideActive: { type: "boolean" as const },
     apiKeyConfigured: { type: "boolean" as const },
+    delivery: { type: "string" as const, enum: ["guided-native", "deterministic"] as const },
     model: { type: "string" as const },
     pluginVersion: { type: "string" as const },
     processPid: { type: "integer" as const },
@@ -30,7 +31,7 @@ const statusOutput = {
     lastRun: { type: "string" as const },
     history: { type: "string" as const },
   },
-  required: ["enabled", "configuredEnabled", "overrideActive", "apiKeyConfigured", "model", "pluginVersion", "processPid", "instanceId", "setupAt", "locationDirectory", "locationWorkspaceID", "modelRequestCount", "lastModelRequestSessionID", "lastModelRequestAt", "hookInvocations", "lastHookSessionID", "lastHookInvocationAt", "lastRun", "history"],
+  required: ["enabled", "configuredEnabled", "overrideActive", "apiKeyConfigured", "delivery", "model", "pluginVersion", "processPid", "instanceId", "setupAt", "locationDirectory", "locationWorkspaceID", "modelRequestCount", "lastModelRequestSessionID", "lastModelRequestAt", "hookInvocations", "lastHookSessionID", "lastHookInvocationAt", "lastRun", "history"],
   additionalProperties: false,
 } as const
 
