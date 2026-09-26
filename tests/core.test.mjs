@@ -14,6 +14,7 @@ import { prunablePayloadCapacity, reductionGate, semanticPayloadReduction } from
 import { assembleCheckpoint } from "../.test-dist/src/transcript/checkpoint.js"
 import { parseJevResponse, JevMalformedResponseError } from "../.test-dist/src/jev/parse.js"
 import { compactTranscript } from "../.test-dist/src/compaction/engine.js"
+import { buildNativeCompactionGuidance, nativeGuidanceMessage } from "../.test-dist/src/compaction/guidance.js"
 import { DEFAULT_OPTIONS, parseOptions } from "../.test-dist/src/plugin/options.js"
 import { appendHistory, formatHistory, formatRun, makeRunRecord } from "../.test-dist/src/observability/history.js"
 import { toJson } from "../.test-dist/src/observability/json.js"
@@ -49,11 +50,13 @@ const composeOptions = {
   keepThreshold: DEFAULT_OPTIONS.keepThreshold,
 }
 
-test("0.0.6 options expose single-pass policy and bounded batch concurrency", () => {
+test("0.0.8 options default to cache-friendly guided-native delivery", () => {
+  assert.equal(DEFAULT_OPTIONS.delivery, "guided-native")
   assert.equal(DEFAULT_OPTIONS.keepThreshold, 0.15)
   assert.equal(DEFAULT_OPTIONS.maxConcurrentRequests, 2)
   const parsed = parseOptions({
     enabled: false,
+    delivery: "deterministic",
     keepThreshold: 0.2,
     toolResultPreviewChars: 250,
     maxStateTokens: 23000,
@@ -61,11 +64,50 @@ test("0.0.6 options expose single-pass policy and bounded batch concurrency", ()
     maxConcurrentRequests: 1,
   })
   assert.equal(parsed.enabled, false)
+  assert.equal(parsed.delivery, "deterministic")
   assert.equal(parsed.keepThreshold, 0.2)
   assert.equal(parsed.toolResultPreviewChars, 250)
   assert.equal(parsed.maxConcurrentRequests, 1)
   assert.equal(parsed.maxRequestTokens, 30000)
   assert.equal(parseOptions({ maxRequestTokens: 60000 }).maxRequestTokens, DEFAULT_OPTIONS.maxRequestTokens)
+  assert.equal(parseOptions({ delivery: "invalid" }).delivery, "guided-native")
+})
+
+test("native guidance contains only bounded tool identifiers and keeps existing prefix append-only", () => {
+  const stats = {
+    toolDecisionDiagnostics: [
+      { toolCallId: "read-1", toolName: "read", action: "drop", reason: "jev", keepCall: 0.02, keepResult: 0.01 },
+      { toolCallId: "shell-1", toolName: "shell", action: "keep_call_truncate_result", reason: "jev", keepResult: 0.03 },
+      { toolCallId: "keep-1", toolName: "read", action: "keep_full", reason: "jev", keepCall: 0.9, keepResult: 0.9 },
+    ],
+  }
+  const guidance = buildNativeCompactionGuidance(stats)
+  assert.ok(guidance)
+  assert.equal(guidance.items, 2)
+  assert.equal(guidance.dropped, 1)
+  assert.equal(guidance.provenanceOnly, 1)
+  assert.match(guidance.text, /call_id=read-1 tool=read/)
+  assert.match(guidance.text, /call_id=shell-1 tool=shell/)
+  assert.doesNotMatch(guidance.text, /keep-1/)
+  assert.doesNotMatch(guidance.text, /0\.0[1239]/)
+
+  const original = [{ role: "user", content: [{ type: "text", text: "cached prefix" }] }]
+  const appended = [...original, nativeGuidanceMessage(guidance.text)]
+  assert.strictEqual(appended[0], original[0])
+  assert.deepEqual(appended.slice(0, -1), original)
+  assert.equal(appended.at(-1).role, "system")
+  assert.match(appended.at(-1).content[0].text, /operator-authored guidance/)
+})
+
+test("native guidance sanitizes control characters from tool labels", () => {
+  const guidance = buildNativeCompactionGuidance({
+    toolDecisionDiagnostics: [
+      { toolCallId: "id\nforged", toolName: "read\u2028evil", action: "drop", reason: "jev" },
+    ],
+  })
+  assert.ok(guidance)
+  assert.doesNotMatch(guidance.text, /\nforged|\u2028evil/)
+  assert.match(guidance.text, /call_id=id forged tool=read evil/)
 })
 
 test("storage JSON normalization removes undefined and rejects non-finite values", () => {
@@ -93,6 +135,7 @@ test("status reports instance identity and only compaction hook/request observat
   })
   try {
     const initial = await handlers.status()
+    assert.equal(initial.delivery, "guided-native")
     assert.equal(initial.processPid, process.pid)
     assert.match(initial.instanceId, /^[0-9a-f-]{36}$/)
     assert.ok(!Number.isNaN(Date.parse(initial.setupAt)))
@@ -618,10 +661,13 @@ test("same state and Jev answers produce identical decisions", async () => {
 
 test("history exposes semantic metrics and bounded per-tool diagnostics", () => {
   const stats = {
-    pluginVersion: "0.0.6",
+    pluginVersion: "0.0.8",
+    delivery: "guided-native",
     sessionID: "ses_test",
     originalEstimatedTokens: 100000,
     checkpointEstimatedTokens: 20000,
+    nativeGuidanceChars: 900,
+    nativeGuidanceItems: 2,
     removedFraction: 0.8,
     remainingRatio: 0.2,
     semanticPayloadCharsBefore: 100000,
@@ -653,8 +699,9 @@ test("history exposes semantic metrics and bounded per-tool diagnostics", () => 
     redactions: 0,
   }
   const record = makeRunRecord("ok", null, stats, "2026-01-02T00:00:00Z")
-  assert.match(formatRun(record), /historical plugin 0\.0\.6/)
-  assert.match(formatRun(record), /semantic payload 100,000 -> 30,000 chars; removed 70\.0%/)
+  assert.match(formatRun(record), /historical plugin 0\.0\.8; delivery guided-native/)
+  assert.match(formatRun(record), /deterministic candidate 20,000 tokens; native guidance 900 chars \/ 2 item\(s\)/)
+  assert.match(formatRun(record), /semantic payload 100,000 -> 30,000 chars; removable by Jev policy 70\.0%/)
   assert.match(formatRun(record), /max prunable 80,000 chars \/ 80\.0% across 2 tool\(s\)/)
   assert.match(formatRun(record), /Jev state 70,000 chars \/ 20,000 tokens; fit old-calls-compacted/)
   assert.match(formatRun(record), /t1:read:drop\/call=0\.10\/result=0\.10\/verify=0\.95/)
@@ -662,6 +709,9 @@ test("history exposes semantic metrics and bounded per-tool diagnostics", () => 
   const legacyStats = { ...stats }
   for (const key of [
     "pluginVersion",
+    "delivery",
+    "nativeGuidanceChars",
+    "nativeGuidanceItems",
     "sessionID",
     "semanticPayloadCharsBefore",
     "semanticPayloadCharsAfter",
