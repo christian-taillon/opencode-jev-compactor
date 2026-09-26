@@ -1,6 +1,7 @@
 import { Plugin } from "@opencode/plugin"
 import { randomUUID } from "node:crypto"
 import { compactTranscript, initialCompactionStats, PLUGIN_VERSION } from "./compaction/engine.js"
+import { buildNativeCompactionGuidance, nativeGuidanceMessage } from "./compaction/guidance.js"
 import type { CompactionRunRecord } from "./domain/types.js"
 import { JevClient } from "./jev/client.js"
 import { appendHistory, formatHistory, formatRun, makeRunRecord } from "./observability/history.js"
@@ -74,6 +75,7 @@ export default Plugin.define({
         configuredEnabled: options.enabled,
         overrideActive: runtime.overrideActive,
         apiKeyConfigured: Boolean(client),
+        delivery: options.delivery,
         model: options.model,
         pluginVersion: PLUGIN_VERSION,
         processPid: process.pid,
@@ -131,6 +133,7 @@ export default Plugin.define({
       runtime.lastHookInvocationAt = new Date().toISOString()
       if (event.result !== undefined) {
         const stats = initialCompactionStats(event.messages, event.sessionID)
+        stats.delivery = options.delivery
         stats.fallbackReason = "preexisting-compaction-result"
         try { await persistRecord(makeRunRecord("fallback", "preexisting-compaction-result", stats)) } catch { /* observability only */ }
         log({ event: "compaction.skipped", level: "warn", reason: "preexisting-compaction-result", sessionID: event.sessionID })
@@ -138,12 +141,14 @@ export default Plugin.define({
       }
       if (!runtime.enabled) {
         const stats = initialCompactionStats(event.messages, event.sessionID)
+        stats.delivery = options.delivery
         stats.fallbackReason = "plugin-disabled"
         try { await persistRecord(makeRunRecord("disabled", "plugin-disabled", stats)) } catch { /* observability only */ }
         return
       }
       if (!client) {
         const stats = initialCompactionStats(event.messages, event.sessionID)
+        stats.delivery = options.delivery
         stats.fallbackReason = "missing-typesafe-api-key"
         try { await persistRecord(makeRunRecord("fallback", "missing-typesafe-api-key", stats)) } catch { /* observability only */ }
         log({ event: "compaction.fallback", level: "warn", reason: "missing-typesafe-api-key" })
@@ -153,38 +158,72 @@ export default Plugin.define({
       try {
         const outcome = await compactTranscript(event.messages, client, options, eventAbortSignal(event), event.sessionID)
         const stats = outcome.status === "ok" ? outcome.checkpoint.stats : outcome.stats
+        let recordReason: string | null = outcome.status === "ok" ? null : outcome.reason
         if (outcome.status === "ok") {
-          event.result = {
-            summary: outcome.checkpoint.summary,
-            metadata: {
-              plugin: "opencode.jev-compaction",
-              version: PLUGIN_VERSION,
-              model: options.model,
-              policy: "single-pass-deterministic-tool-policy-v6",
-              stats,
-            },
+          if (options.delivery === "guided-native") {
+            const guidance = buildNativeCompactionGuidance(stats)
+            if (!guidance) {
+              recordReason = "native-guidance-empty"
+              stats.fallbackReason = recordReason
+              log({ event: "compaction.fallback", level: "warn", reason: recordReason })
+            } else {
+              stats.nativeGuidanceChars = guidance.text.length
+              stats.nativeGuidanceItems = guidance.items
+              // Copy-on-write append: every existing message remains in the same order and
+              // unchanged, so provider prefix caching can still match through the old history.
+              event.messages = [...event.messages, nativeGuidanceMessage(guidance.text)]
+              recordReason = "native-guidance"
+              log({
+                event: "compaction.guidance",
+                delivery: options.delivery,
+                guidanceItems: guidance.items,
+                guidanceChars: guidance.text.length,
+                guidanceDropped: guidance.dropped,
+                guidanceProvenanceOnly: guidance.provenanceOnly,
+                toolsScored: stats.toolsScored,
+                semanticReductionActions: stats.semanticReductionActions,
+                semanticRemovedFraction: stats.semanticRemovedFraction,
+                jevRequests: stats.jevRequests,
+                jevInputTokens: stats.jevInputTokens,
+                estimatedJevCostUsd: stats.estimatedJevCostUsd,
+                latencyMs: stats.jevLatencyMs,
+              })
+            }
+          } else {
+            event.result = {
+              summary: outcome.checkpoint.summary,
+              metadata: {
+                plugin: "opencode.jev-compaction",
+                version: PLUGIN_VERSION,
+                model: options.model,
+                delivery: options.delivery,
+                policy: "single-pass-deterministic-tool-policy-v7",
+                stats,
+              },
+            }
+            log({
+              event: "compaction.complete",
+              delivery: options.delivery,
+              toolsScored: stats.toolsScored,
+              toolsKeptFull: stats.toolsKeptFull,
+              toolsTruncated: stats.toolsTruncated,
+              toolsDropped: stats.toolsDropped,
+              textsKept: stats.textsKept,
+              textsDropped: stats.textsDropped,
+              semanticReductionActions: stats.semanticReductionActions,
+              semanticRemovedFraction: stats.semanticRemovedFraction,
+              jevRequests: stats.jevRequests,
+              jevInputTokens: stats.jevInputTokens,
+              estimatedJevCostUsd: stats.estimatedJevCostUsd,
+              latencyMs: stats.jevLatencyMs,
+              removedFraction: stats.removedFraction,
+            })
           }
-          log({
-            event: "compaction.complete",
-            toolsScored: stats.toolsScored,
-            toolsKeptFull: stats.toolsKeptFull,
-            toolsTruncated: stats.toolsTruncated,
-            toolsDropped: stats.toolsDropped,
-            textsKept: stats.textsKept,
-            textsDropped: stats.textsDropped,
-            semanticReductionActions: stats.semanticReductionActions,
-            semanticRemovedFraction: stats.semanticRemovedFraction,
-            jevRequests: stats.jevRequests,
-            jevInputTokens: stats.jevInputTokens,
-            estimatedJevCostUsd: stats.estimatedJevCostUsd,
-            latencyMs: stats.jevLatencyMs,
-            removedFraction: stats.removedFraction,
-          })
         } else {
           log({ event: "compaction.fallback", level: "warn", reason: outcome.reason, jevRequests: stats.jevRequests, latencyMs: stats.jevLatencyMs })
         }
         try {
-          await persistRecord(makeRunRecord(outcome.status, outcome.status === "ok" ? null : outcome.reason, stats))
+          await persistRecord(makeRunRecord(outcome.status, recordReason, stats))
         } catch (error) {
           log({ event: "storage.error", level: "warn", type: error instanceof Error ? error.name : "Error" })
         }
@@ -201,6 +240,7 @@ export default Plugin.define({
       event: "plugin.loaded",
       version: PLUGIN_VERSION,
       model: options.model,
+      delivery: options.delivery,
       enabled: runtime.enabled,
       configuredEnabled: options.enabled,
       overrideActive: runtime.overrideActive,
