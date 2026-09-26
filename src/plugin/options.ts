@@ -1,5 +1,8 @@
+export type CompactionDelivery = "guided-native" | "deterministic"
+
 export interface PluginOptions {
   enabled: boolean
+  delivery: CompactionDelivery
   model: string
   keepThreshold: number
   preserveRecentMessages: number
@@ -20,6 +23,7 @@ export interface PluginOptions {
 
 export const DEFAULT_OPTIONS: PluginOptions = {
   enabled: true,
+  delivery: "guided-native",
   model: "jev-latest",
   keepThreshold: 0.15,
   preserveRecentMessages: 6,
@@ -58,9 +62,14 @@ function stringOption(value: unknown, fallback: string): string {
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : fallback
 }
 
+function deliveryOption(value: unknown): CompactionDelivery {
+  return value === "guided-native" || value === "deterministic" ? value : DEFAULT_OPTIONS.delivery
+}
+
 export function parseOptions(input: Record<string, unknown>): PluginOptions {
   return {
     enabled: boolOption(input.enabled, DEFAULT_OPTIONS.enabled),
+    delivery: deliveryOption(input.delivery),
     model: stringOption(input.model, DEFAULT_OPTIONS.model),
     keepThreshold: numberOption(input.keepThreshold, DEFAULT_OPTIONS.keepThreshold, 0, 1),
     preserveRecentMessages: numberOption(
