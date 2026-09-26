@@ -173,6 +173,93 @@ test("status reports instance identity and only compaction hook/request observat
   }
 })
 
+async function withFakeJevPlugin(delivery, run) {
+  const previousKey = process.env.TYPESAFE_API_KEY
+  const previousFetch = globalThis.fetch
+  process.env.TYPESAFE_API_KEY = "test-key"
+  globalThis.fetch = async (_url, init) => {
+    const body = JSON.parse(String(init?.body ?? "{}"))
+    return new Response(JSON.stringify({
+      model: "jev-latest",
+      answers: Object.fromEntries(
+        Object.keys(body.questions ?? {}).map((id) => [id, { type: "noul", noul: 0.05 }]),
+      ),
+      usage: { input_tokens: 1000, output_tokens: 0 },
+    }), { status: 200, headers: { "content-type": "application/json" } })
+  }
+
+  const hooks = new Map()
+  const storage = new Map()
+  const dispose = { async dispose() {} }
+  let handlers
+  const cleanup = await plugin.setup({
+    options: {
+      delivery,
+      enableCompareTool: false,
+      preserveRecentMessages: 2,
+      timeoutMs: 1000,
+    },
+    location: { directory: "/test/location" },
+    storage: {
+      async get(key) { return storage.get(key) },
+      async set(key, value) { storage.set(key, value) },
+    },
+    rpc: { async register(_definition, value) { handlers = value; return dispose } },
+    session: { async hook(name, callback) { hooks.set(name, callback); return dispose } },
+  })
+
+  try {
+    await run({ hooks, handlers })
+  } finally {
+    await cleanup?.()
+    globalThis.fetch = previousFetch
+    if (previousKey === undefined) delete process.env.TYPESAFE_API_KEY
+    else process.env.TYPESAFE_API_KEY = previousKey
+  }
+}
+
+test("guided-native appends guidance without rewriting the existing compaction prefix", async () => {
+  const raw = await fixture("tool-heavy-session.json")
+  await withFakeJevPlugin("guided-native", async ({ hooks, handlers }) => {
+    const original = [...raw]
+    const event = { sessionID: "ses_guided", messages: [...raw] }
+    await hooks.get("compaction")(event)
+
+    assert.equal(event.result, undefined)
+    assert.equal(event.messages.length, original.length + 1)
+    for (let index = 0; index < original.length; index += 1) {
+      assert.strictEqual(event.messages[index], original[index])
+    }
+    const guidance = event.messages.at(-1)
+    assert.equal(guidance.role, "system")
+    assert.match(guidance.content[0].text, /<jev-compaction-guidance>/)
+    assert.doesNotMatch(guidance.content[0].text, /OLD CLIENT/)
+
+    const status = await handlers.status()
+    assert.equal(status.delivery, "guided-native")
+    assert.match(status.lastRun, /ok \(native-guidance\)/)
+    assert.match(status.lastRun, /native guidance [1-9][0-9,]* chars/)
+  })
+})
+
+test("deterministic delivery still installs event.result and does not append guidance", async () => {
+  const raw = await fixture("tool-heavy-session.json")
+  await withFakeJevPlugin("deterministic", async ({ hooks, handlers }) => {
+    const event = { sessionID: "ses_deterministic", messages: [...raw] }
+    await hooks.get("compaction")(event)
+
+    assert.equal(event.messages.length, raw.length)
+    assert.ok(event.result)
+    assert.equal(typeof event.result.summary, "string")
+    assert.equal(event.result.metadata.delivery, "deterministic")
+    assert.doesNotMatch(event.result.summary, /<jev-compaction-guidance>/)
+
+    const status = await handlers.status()
+    assert.equal(status.delivery, "deterministic")
+    assert.match(status.lastRun, /delivery deterministic/)
+  })
+})
+
 test("pinning keeps first, newest user, and recent messages", async () => {
   const raw = await fixture("tool-heavy-session.json")
   const transcript = normalizeOpenCodeMessages(raw, 2)
