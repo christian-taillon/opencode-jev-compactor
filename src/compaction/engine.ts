@@ -26,7 +26,7 @@ export interface JevAsker {
   ask(state: JsonValue, questions: Record<string, JevQuestion>, signal?: AbortSignal): Promise<JevBatchResult>
 }
 
-export const PLUGIN_VERSION = "0.0.7"
+export const PLUGIN_VERSION = "0.0.8"
 
 export function initialCompactionStats(rawMessages: readonly unknown[], sessionID?: string): CompactionStats {
   return {
@@ -34,6 +34,8 @@ export function initialCompactionStats(rawMessages: readonly unknown[], sessionI
     pluginVersion: PLUGIN_VERSION,
     originalEstimatedTokens: estimateJsonTokens(rawMessages),
     checkpointEstimatedTokens: 0,
+    nativeGuidanceChars: 0,
+    nativeGuidanceItems: 0,
     removedFraction: 0,
     remainingRatio: 1,
     semanticPayloadCharsBefore: 0,
@@ -168,6 +170,7 @@ export async function compactTranscript(
 ): Promise<CompactionOutcome> {
   const compactionStarted = performance.now()
   const stats = initialCompactionStats(rawMessages, sessionID)
+  stats.delivery = options.delivery
   if (rawMessages.length === 0 || stats.originalEstimatedTokens === 0) return fallback(stats, "empty-transcript")
 
   let transcript: ReturnType<typeof normalizeOpenCodeMessages>
