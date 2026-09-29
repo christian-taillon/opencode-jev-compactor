@@ -13,7 +13,12 @@ Cache-friendly guided native compaction.
 - Retained `delivery: "deterministic"` as an A/B mode that installs the plugin's exact checkpoint through `event.result` and skips the frontier summary request.
 - Added delivery mode and guided-native guidance size/item metrics to `/jev-status` history.
 - Continue computing the deterministic candidate checkpoint in guided-native mode for comparison diagnostics, without installing it.
-- Documented a three-way local benchmark: native OpenCode, Jev guided-native, and Jev deterministic.
+- Documented a four-way local benchmark: native OpenCode, Jev observe, Jev guided-native, and Jev deterministic.
+- Added `delivery: "observe"` to run the full Jev decision pipeline while leaving native OpenCode compaction completely unchanged.
+- Hardened transcript normalization for ignored user text, errored/aborted assistant turns, interrupted tool output, already-compacted tool output, and pseudo-file attachment shapes.
+- Sanitized host-controlled tool IDs/names before placing them in Jev state, Jev instructions, or native guidance.
+- Hardened TypeSafe transport: non-loopback HTTP is rejected, URL credentials/fragments are rejected, and redirects are disabled to protect the bearer token.
+- Added explicit global-vs-project installation guidance and a full local benchmark procedure in `docs/TESTING.md`.
 
 ## 0.0.7
 
