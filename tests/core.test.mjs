@@ -13,6 +13,7 @@ import { classifyTool } from "../.test-dist/src/policy/tool-policy.js"
 import { prunablePayloadCapacity, reductionGate, semanticPayloadReduction } from "../.test-dist/src/policy/reduction.js"
 import { assembleCheckpoint } from "../.test-dist/src/transcript/checkpoint.js"
 import { parseJevResponse, JevMalformedResponseError } from "../.test-dist/src/jev/parse.js"
+import { JevClient } from "../.test-dist/src/jev/client.js"
 import { compactTranscript } from "../.test-dist/src/compaction/engine.js"
 import { buildNativeCompactionGuidance, nativeGuidanceMessage } from "../.test-dist/src/compaction/guidance.js"
 import { DEFAULT_OPTIONS, parseOptions } from "../.test-dist/src/plugin/options.js"
@@ -70,6 +71,7 @@ test("0.0.8 options default to cache-friendly guided-native delivery", () => {
   assert.equal(parsed.maxConcurrentRequests, 1)
   assert.equal(parsed.maxRequestTokens, 30000)
   assert.equal(parseOptions({ maxRequestTokens: 60000 }).maxRequestTokens, DEFAULT_OPTIONS.maxRequestTokens)
+  assert.equal(parseOptions({ delivery: "observe" }).delivery, "observe")
   assert.equal(parseOptions({ delivery: "invalid" }).delivery, "guided-native")
 })
 
@@ -260,6 +262,28 @@ test("deterministic delivery still installs event.result and does not append gui
   })
 })
 
+test("observe delivery records Jev decisions without changing native compaction input", async () => {
+  const raw = await fixture("tool-heavy-session.json")
+  await withFakeJevPlugin("observe", async ({ hooks, handlers }) => {
+    const event = { sessionID: "ses_observe", messages: [...raw] }
+    const originalArray = event.messages
+    const originalItems = [...event.messages]
+    await hooks.get("compaction")(event)
+
+    assert.equal(event.result, undefined)
+    assert.strictEqual(event.messages, originalArray)
+    assert.equal(event.messages.length, originalItems.length)
+    for (let index = 0; index < originalItems.length; index += 1) {
+      assert.strictEqual(event.messages[index], originalItems[index])
+    }
+
+    const status = await handlers.status()
+    assert.equal(status.delivery, "observe")
+    assert.match(status.lastRun, /ok \(observe-only\)/)
+    assert.match(status.lastRun, /native guidance [1-9][0-9,]* chars/)
+  })
+})
+
 test("pinning keeps first, newest user, and recent messages", async () => {
   const raw = await fixture("tool-heavy-session.json")
   const transcript = normalizeOpenCodeMessages(raw, 2)
@@ -294,6 +318,97 @@ test("normalizer accepts exact OpenCode 2.0.7 Message tool and media parts", () 
   assert.equal(transcript.attachments[0].descriptor, "media name=build.ts mediaType=text/plain")
   assert.doesNotMatch(transcript.attachments[0].descriptor, /embedded-data/)
   assert.doesNotMatch(transcript.textBlocks.map((block) => block.text).join("\n"), /chain of thought|effort/)
+})
+
+test("normalizer follows OpenCode ignored-text and errored-assistant semantics", () => {
+  const raw = [
+    {
+      info: { role: "user", id: "u0" },
+      parts: [{ type: "text", ignored: true, text: "USER-IGNORED" }],
+    },
+    {
+      info: { role: "assistant", id: "a0" },
+      parts: [{ type: "text", ignored: true, text: "ASSISTANT-IGNORED" }],
+    },
+    {
+      info: { role: "assistant", id: "a1", error: { name: "APIError" } },
+      parts: [{ type: "text", text: "DROPPED-ERROR-TURN" }],
+    },
+    {
+      info: { role: "assistant", id: "a2", error: { name: "MessageAbortedError" } },
+      parts: [{ type: "reasoning", text: "ABORTED-REASONING-ONLY" }],
+    },
+    {
+      info: { role: "assistant", id: "a3", error: { name: "MessageAbortedError" } },
+      parts: [{ type: "text", text: "ABORTED-BUT-USEFUL" }],
+    },
+  ]
+  const transcript = normalizeOpenCodeMessages(raw, 0)
+  const text = transcript.textBlocks.map((block) => block.text).join("\n")
+  assert.doesNotMatch(text, /USER-IGNORED|DROPPED-ERROR-TURN|ABORTED-REASONING-ONLY/)
+  assert.match(text, /ASSISTANT-IGNORED/)
+  assert.match(text, /ABORTED-BUT-USEFUL/)
+})
+
+test("normalizer uses interrupted tool output and ignores already-compacted output", () => {
+  const raw = [
+    {
+      info: { role: "user", id: "u0" },
+      parts: [{ type: "text", text: "Investigate the failure." }],
+    },
+    {
+      info: { role: "assistant", id: "a1" },
+      parts: [{
+        type: "tool",
+        id: "c1",
+        name: "shell",
+        state: {
+          status: "error",
+          input: { command: "pnpm test" },
+          error: "Tool execution aborted",
+          metadata: { interrupted: true, output: "X".repeat(1000) },
+          time: { start: 0, end: 1 },
+        },
+      }],
+    },
+    {
+      info: { role: "assistant", id: "a2" },
+      parts: [{
+        type: "tool",
+        id: "c2",
+        name: "read",
+        state: {
+          status: "completed",
+          input: { path: "README.md" },
+          output: "Y".repeat(4000),
+          metadata: {},
+          time: { start: 0, end: 1, compacted: 123 },
+        },
+      }],
+    },
+  ]
+  const transcript = normalizeOpenCodeMessages(raw, 0)
+  const interrupted = transcript.toolCalls.find((call) => call.id === "c1")
+  const cleared = transcript.toolCalls.find((call) => call.id === "c2")
+  assert.equal(interrupted.result.text.length, 1000)
+  assert.equal(interrupted.result.isError, true)
+  assert.equal(cleared.result.text, "")
+  assert.equal(cleared.result.isError, false)
+})
+
+test("normalizer ignores inlined plain-text and directory pseudo-attachments", () => {
+  const raw = [{
+    info: { role: "user", id: "u0" },
+    parts: [
+      { type: "file", mime: "text/plain", url: "data:text/plain;base64," + "A".repeat(1000) },
+      { type: "file", mime: "application/x-directory", url: "/tmp/project" },
+      { type: "file", mime: "image/png", filename: "diagram.png", url: "file:///tmp/diagram.png" },
+    ],
+  }]
+  const transcript = normalizeOpenCodeMessages(raw, 0)
+  assert.equal(transcript.attachments.length, 1)
+  assert.match(transcript.attachments[0].descriptor, /diagram\.png/)
+  assert.doesNotMatch(transcript.attachments[0].descriptor, /data:text\/plain|x-directory/)
 })
 
 test("checkpoint parser extracts structured baseline without preserving the envelope", () => {
@@ -375,6 +490,41 @@ test("Jev state is chronological and tool results are tiny previews without chan
   assert.equal(typeof tool, "object")
   assert.equal(tool.result.chars, 5000)
   assert.ok(tool.result.preview.length < 500)
+})
+
+test("Jev state and questions sanitize host-controlled tool labels", () => {
+  const raw = [
+    { id: "u0", role: "user", content: [{ type: "text", text: "Inspect the project." }] },
+    {
+      id: "a1",
+      role: "assistant",
+      content: [{
+        type: "tool-call",
+        id: "call\nforged",
+        name: "read\u2028evil",
+        input: { path: "README.md" },
+      }],
+    },
+    {
+      id: "t1",
+      role: "tool",
+      content: [{
+        type: "tool-result",
+        id: "call\nforged",
+        name: "read\u2028evil",
+        result: { type: "text", value: "result" },
+      }],
+    },
+  ]
+  const transcript = normalizeOpenCodeMessages(raw, 0)
+  const built = buildJevState(transcript, { toolResultPreviewChars: 300 })
+  const tool = built.state.history.find((entry) => entry.tool_calls?.length)?.tool_calls?.[0]
+  assert.equal(tool.id, "call forged")
+  assert.equal(tool.name, "read evil")
+  const plan = buildQuestionPlan(built.state, transcript, built.constraints, built.files)
+  const instructions = Object.values(plan.questions).map((question) => question.instructions).join("\n")
+  assert.doesNotMatch(instructions, /call\nforged|read\u2028evil/)
+  assert.match(instructions, /call forged|read evil/)
 })
 
 test("state fitting aggressively collapses old Jev-only history", () => {
@@ -627,6 +777,58 @@ test("engine skips Jev when even maximum eligible pruning cannot clear the seman
   assert.equal(outcome.stats.jevRequests, 0)
   assert.ok(outcome.stats.maxPrunableFraction < DEFAULT_OPTIONS.minReductionRatio)
   assert.equal(outcome.stats.eligiblePrunableTools, 1)
+})
+
+test("Jev client rejects insecure non-loopback HTTP before fetch", async () => {
+  const previousFetch = globalThis.fetch
+  let called = false
+  globalThis.fetch = async () => {
+    called = true
+    throw new Error("fetch should not run")
+  }
+  try {
+    const client = new JevClient({
+      apiKey: "test-key",
+      baseUrl: "http://evil.example/systemone",
+      model: "jev-latest",
+      timeoutMs: 1000,
+    })
+    await assert.rejects(client.ask({}, {}), /must use https unless it targets loopback/)
+    assert.equal(called, false)
+  } finally {
+    globalThis.fetch = previousFetch
+  }
+})
+
+test("Jev client allows loopback HTTP and sends a hardened request", async () => {
+  const previousFetch = globalThis.fetch
+  let capturedUrl
+  let capturedInit
+  globalThis.fetch = async (url, init) => {
+    capturedUrl = String(url)
+    capturedInit = init
+    return new Response(JSON.stringify({
+      model: "jev-latest",
+      answers: {},
+      usage: { input_tokens: 0, output_tokens: 0 },
+    }), { status: 200, headers: { "content-type": "application/json" } })
+  }
+  try {
+    const client = new JevClient({
+      apiKey: "test-key",
+      baseUrl: "http://127.0.0.1:8080/systemone",
+      model: "jev-latest",
+      timeoutMs: 1000,
+    })
+    await client.ask({}, {})
+    assert.equal(capturedUrl, "http://127.0.0.1:8080/systemone")
+    assert.equal(capturedInit.method, "POST")
+    assert.equal(capturedInit.redirect, "error")
+    assert.equal(capturedInit.headers.authorization, "Bearer test-key")
+    assert.equal(capturedInit.headers.accept, "application/json")
+  } finally {
+    globalThis.fetch = previousFetch
+  }
 })
 
 test("malformed Jev payload is rejected", async () => {
