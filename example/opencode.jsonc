@@ -14,9 +14,9 @@
       "package": "./plugins/jev-compaction",
       "options": {
         "enabled": true,
-        // guided-native preserves the existing provider-cache prefix and lets
-        // OpenCode write the final structured summary. Use deterministic to
-        // compare against the previous no-frontier-summary path.
+        // Start with observe to inspect Jev decisions without changing native
+        // compaction. Then use guided-native for the cache-friendly hybrid.
+        // deterministic skips the frontier summary for A/B comparison.
         "delivery": "guided-native",
         "model": "jev-latest",
 
