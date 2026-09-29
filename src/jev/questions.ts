@@ -4,6 +4,7 @@ import type {
   NormalizedTranscript,
 } from "../domain/types.js"
 import { classifyTool, type ToolRetentionPolicy } from "../policy/tool-policy.js"
+import { compactLabel } from "../state/sanitize.js"
 import type { JevState } from "../state/build.js"
 import type { JevQuestion, NoulQuestion } from "./types.js"
 
@@ -66,14 +67,14 @@ export function buildQuestionPlan(
     if (policy === "drop_eligible") {
       ids.keepCall = `${prefix}_keep_call`
       questions[ids.keepCall] = noul(
-        `For the current objective in state.goal, should history retain that tool call ${call.id} (${call.toolName}) happened, including its input, because losing that provenance would impair correct continuation or cause meaningful repeated work?`,
+        `For the current objective in state.goal, should history retain that tool call ${compactLabel(call.id)} (${compactLabel(call.toolName)}) happened, including its input, because losing that provenance would impair correct continuation or cause meaningful repeated work?`,
         "The call/input is still necessary for the current objective, an applicable decision or constraint, completed-work provenance, or avoiding meaningful repeated work.",
         "Knowing this call happened is no longer necessary for correct continuation; if needed, this cheap read-only operation can be repeated.",
       )
     }
 
     questions[keepResult] = noul(
-      `For the current objective in state.goal, does the exact full output of tool call ${call.id} (${call.toolName}) still need to remain available verbatim, rather than keeping a short exact prefix and rerunning/re-reading the tool if needed?`,
+      `For the current objective in state.goal, does the exact full output of tool call ${compactLabel(call.id)} (${compactLabel(call.toolName)}) still need to remain available verbatim, rather than keeping a short exact prefix and rerunning/re-reading the tool if needed?`,
       "Exact result content is still necessary, including precise unresolved evidence, identifiers, values, or content that cannot safely be recovered for the current objective.",
       "The exact full result is no longer necessary; a short retained prefix or repeating the operation would be sufficient if the content becomes needed again.",
     )
