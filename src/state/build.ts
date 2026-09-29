@@ -1,6 +1,7 @@
 import type { ConstraintCandidate, FileCandidate, NormalizedTranscript, ResolvedObjective } from "../domain/types.js"
 import { resolveObjective } from "../transcript/checkpoint-state.js"
 import { redactSecrets } from "./redact.js"
+import { compactLabel } from "./sanitize.js"
 
 export const STATE_CONTEXT =
   "An OpenCode coding conversation is being compacted. history is chronological and contains user/assistant text plus tool-call summaries. Tool results shown here are deliberately abbreviated; local originals remain available to application code. Judge whether tool provenance and exact tool-result content are still needed for correct continuation."
@@ -120,7 +121,7 @@ export function buildJevState(transcript: NormalizedTranscript, options: BuildSt
 
     const entry: JevHistoryEntry = {
       i: message.index,
-      messageId: message.id,
+      messageId: compactLabel(message.id),
       role: message.role,
       text: redact(text),
       pinned: message.pinned,
@@ -130,8 +131,8 @@ export function buildJevState(transcript: NormalizedTranscript, options: BuildSt
         const raw = call.result?.text ?? ""
         const statePreview = preview(raw, options.toolResultPreviewChars)
         return {
-          id: call.id,
-          name: call.toolName,
+          id: compactLabel(call.id),
+          name: compactLabel(call.toolName),
           input: redact(call.inputText),
           result: {
             status: call.result ? (call.result.isError ? "error" : "ok") : "none",
