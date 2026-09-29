@@ -42,8 +42,6 @@ Single-pass Jev compaction with deterministic safety policy.
 - Added bounded first-pass batch concurrency with `maxConcurrentRequests` (default 2).
 - Preserved verbatim user/assistant text, chronological state fitting, previous-checkpoint baselines, semantic-reduction acceptance, native OpenCode fallback, redaction, and existing run diagnostics.
 - Kept legacy verification fields readable in historical 0.0.5 run records.
-
-
 - Pinned `@opencode/plugin` to OpenCode 2.0.14 and verified the compaction hook, RPC, TUI, and storage contracts.
 - Displayed the loaded plugin version and per-load hook invocation count/timestamp separately from historical compaction runs in `/jev-status`.
 - Added conventional root entrypoints so OpenCode 2.0.7 can discover all server, TUI, and RPC features when the repository is configured as a local plugin directory.
