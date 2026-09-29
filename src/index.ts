@@ -160,7 +160,7 @@ export default Plugin.define({
         const stats = outcome.status === "ok" ? outcome.checkpoint.stats : outcome.stats
         let recordReason: string | null = outcome.status === "ok" ? null : outcome.reason
         if (outcome.status === "ok") {
-          if (options.delivery === "guided-native") {
+          if (options.delivery === "guided-native" || options.delivery === "observe") {
             const guidance = buildNativeCompactionGuidance(stats)
             if (!guidance) {
               recordReason = "native-guidance-empty"
@@ -169,25 +169,44 @@ export default Plugin.define({
             } else {
               stats.nativeGuidanceChars = guidance.text.length
               stats.nativeGuidanceItems = guidance.items
-              // Copy-on-write append: every existing message remains in the same order and
-              // unchanged, so provider prefix caching can still match through the old history.
-              event.messages = [...event.messages, nativeGuidanceMessage(guidance.text)]
-              recordReason = "native-guidance"
-              log({
-                event: "compaction.guidance",
-                delivery: options.delivery,
-                guidanceItems: guidance.items,
-                guidanceChars: guidance.text.length,
-                guidanceDropped: guidance.dropped,
-                guidanceProvenanceOnly: guidance.provenanceOnly,
-                toolsScored: stats.toolsScored,
-                semanticReductionActions: stats.semanticReductionActions,
-                semanticRemovedFraction: stats.semanticRemovedFraction,
-                jevRequests: stats.jevRequests,
-                jevInputTokens: stats.jevInputTokens,
-                estimatedJevCostUsd: stats.estimatedJevCostUsd,
-                latencyMs: stats.jevLatencyMs,
-              })
+              if (options.delivery === "guided-native") {
+                // Copy-on-write append: every existing message remains in the same order and
+                // unchanged, so provider prefix caching can still match through the old history.
+                event.messages = [...event.messages, nativeGuidanceMessage(guidance.text)]
+                recordReason = "native-guidance"
+                log({
+                  event: "compaction.guidance",
+                  delivery: options.delivery,
+                  guidanceItems: guidance.items,
+                  guidanceChars: guidance.text.length,
+                  guidanceDropped: guidance.dropped,
+                  guidanceProvenanceOnly: guidance.provenanceOnly,
+                  toolsScored: stats.toolsScored,
+                  semanticReductionActions: stats.semanticReductionActions,
+                  semanticRemovedFraction: stats.semanticRemovedFraction,
+                  jevRequests: stats.jevRequests,
+                  jevInputTokens: stats.jevInputTokens,
+                  estimatedJevCostUsd: stats.estimatedJevCostUsd,
+                  latencyMs: stats.jevLatencyMs,
+                })
+              } else {
+                // Observe mode intentionally leaves both messages and result untouched so
+                // OpenCode performs its exact native compaction while we retain Jev diagnostics.
+                recordReason = "observe-only"
+                log({
+                  event: "compaction.observe",
+                  delivery: options.delivery,
+                  projectedGuidanceItems: guidance.items,
+                  projectedGuidanceChars: guidance.text.length,
+                  toolsScored: stats.toolsScored,
+                  semanticReductionActions: stats.semanticReductionActions,
+                  semanticRemovedFraction: stats.semanticRemovedFraction,
+                  jevRequests: stats.jevRequests,
+                  jevInputTokens: stats.jevInputTokens,
+                  estimatedJevCostUsd: stats.estimatedJevCostUsd,
+                  latencyMs: stats.jevLatencyMs,
+                })
+              }
             }
           } else {
             event.result = {
