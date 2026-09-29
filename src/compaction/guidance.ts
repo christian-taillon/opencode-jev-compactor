@@ -1,4 +1,5 @@
 import type { CompactionStats, ToolDecisionDiagnostic } from "../domain/types.js"
+import { compactLabel } from "../state/sanitize.js"
 
 export interface NativeCompactionGuidance {
   text: string
@@ -9,18 +10,9 @@ export interface NativeCompactionGuidance {
 }
 
 const MAX_GUIDANCE_ITEMS = 96
-const MAX_LABEL_CHARS = 120
-
-function safeLabel(value: string): string {
-  return value
-    .replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]+/g, " ")
-    .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, MAX_LABEL_CHARS)
-}
 
 function line(item: ToolDecisionDiagnostic): string {
-  return `- call_id=${safeLabel(item.toolCallId)} tool=${safeLabel(item.toolName)}`
+  return `- call_id=${compactLabel(item.toolCallId)} tool=${compactLabel(item.toolName)}`
 }
 
 /**
