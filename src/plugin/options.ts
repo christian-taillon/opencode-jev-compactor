@@ -1,4 +1,4 @@
-export type CompactionDelivery = "guided-native" | "deterministic"
+export type CompactionDelivery = "guided-native" | "deterministic" | "observe"
 
 export interface PluginOptions {
   enabled: boolean
@@ -63,7 +63,9 @@ function stringOption(value: unknown, fallback: string): string {
 }
 
 function deliveryOption(value: unknown): CompactionDelivery {
-  return value === "guided-native" || value === "deterministic" ? value : DEFAULT_OPTIONS.delivery
+  return value === "guided-native" || value === "deterministic" || value === "observe"
+    ? value
+    : DEFAULT_OPTIONS.delivery
 }
 
 export function parseOptions(input: Record<string, unknown>): PluginOptions {
