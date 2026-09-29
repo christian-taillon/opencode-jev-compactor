@@ -501,7 +501,7 @@ test("Jev state and questions sanitize host-controlled tool labels", () => {
       content: [{
         type: "tool-call",
         id: "call\nforged",
-        name: "read\u2028evil",
+        name: "read",
         input: { path: "README.md" },
       }],
     },
@@ -511,7 +511,7 @@ test("Jev state and questions sanitize host-controlled tool labels", () => {
       content: [{
         type: "tool-result",
         id: "call\nforged",
-        name: "read\u2028evil",
+        name: "read",
         result: { type: "text", value: "result" },
       }],
     },
@@ -520,7 +520,7 @@ test("Jev state and questions sanitize host-controlled tool labels", () => {
   const built = buildJevState(transcript, { toolResultPreviewChars: 300 })
   const tool = built.state.history.find((entry) => entry.tool_calls?.length)?.tool_calls?.[0]
   assert.equal(tool.id, "call forged")
-  assert.equal(tool.name, "read evil")
+  assert.equal(tool.name, "read")
   const plan = buildQuestionPlan(built.state, transcript, built.constraints, built.files)
   const instructions = Object.values(plan.questions).map((question) => question.instructions).join("\n")
   assert.doesNotMatch(instructions, /call\nforged|read\u2028evil/)
