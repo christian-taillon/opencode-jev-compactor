@@ -1,4 +1,6 @@
-export type CompactionDelivery = "guided-native" | "deterministic" | "observe"
+import type { CompactionDelivery } from "../domain/types.js"
+
+export type { CompactionDelivery }
 
 export interface PluginOptions {
   enabled: boolean
