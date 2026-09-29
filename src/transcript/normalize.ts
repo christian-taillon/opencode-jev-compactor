@@ -27,10 +27,15 @@ function roleOf(value: unknown): Role {
   return "unknown"
 }
 
+function messageInfo(record: Record<string, unknown>): Record<string, unknown> {
+  return isRecord(record.info) ? record.info : record
+}
+
 function messageRole(record: Record<string, unknown>): Role {
-  const explicit = roleOf(record.role)
+  const info = messageInfo(record)
+  const explicit = roleOf(info.role)
   if (explicit !== "unknown") return explicit
-  const type = readString(record, "type")
+  const type = readString(info, "type") ?? readString(record, "type")
   if (type === "user") return "user"
   if (type === "assistant") return "assistant"
   if (type === "system" || type === "synthetic" || type === "skill" || type === "compaction") return "system"
@@ -134,6 +139,16 @@ function openCodeToolResult(part: Record<string, unknown>): { text: string; isEr
 }
 
 function openCodeToolStateResultText(state: Record<string, unknown>): string {
+  const time = isRecord(state.time) ? state.time : undefined
+  if (time?.compacted !== undefined) return ""
+
+  const metadata = isRecord(state.metadata) ? state.metadata : undefined
+  if (
+    state.status === "error" &&
+    metadata?.interrupted === true &&
+    typeof metadata.output === "string"
+  ) return metadata.output
+
   const content = toolResultText(state)
   if (state.status !== "error") return content
   const serializedError = state.error === undefined ? "" : safeStringify(state.error)
@@ -166,6 +181,33 @@ function isToolResultType(type: string): boolean {
 
 function isAttachmentType(type: string): boolean {
   return type === "file" || type === "image" || type === "media" || type === "attachment" || type === "resource"
+}
+
+function ignoreAttachment(part: Record<string, unknown>): boolean {
+  const mediaType = readString(part, "mediaType", "mimeType", "mime_type", "mime")?.toLowerCase()
+  const url = readString(part, "url", "uri")
+  if (mediaType === "application/x-directory") return true
+  if (mediaType === "text/plain" && typeof url === "string" && url.startsWith("data:text/plain")) return true
+  return false
+}
+
+function meaningfulAbortedPart(value: unknown): boolean {
+  if (typeof value === "string") return value.trim().length > 0
+  if (!isRecord(value)) return false
+  const type = readString(value, "type") ?? ""
+  if (type === "text") return (readString(value, "text", "value") ?? "").trim().length > 0
+  return type === "tool" || isToolCallType(type) || isToolResultType(type)
+}
+
+function shouldDropErroredAssistant(
+  role: Role,
+  info: Record<string, unknown>,
+  items: readonly unknown[],
+): boolean {
+  if (role !== "assistant" || !isRecord(info.error)) return false
+  const name = readString(info.error, "name", "type") ?? ""
+  if (name !== "MessageAbortedError") return true
+  return !items.some(meaningfulAbortedPart)
 }
 
 function pinTranscript(transcript: NormalizedTranscript, preserveRecentMessages: number): void {
@@ -237,7 +279,11 @@ export function normalizeOpenCodeMessages(rawMessages: readonly unknown[], prese
     const raw = rawMessages[messageIndex]
     const record = isRecord(raw) ? raw : { content: safeStringify(raw), role: "unknown" }
     const role = messageRole(record)
-    const messageId = readString(record, "id", "messageID", "messageId") ?? `m${messageIndex}`
+    const info = messageInfo(record)
+    const messageId =
+      readString(info, "id", "messageID", "messageId") ??
+      readString(record, "id", "messageID", "messageId") ??
+      `m${messageIndex}`
     const message: TranscriptMessage = {
       id: messageId,
       index: messageIndex,
@@ -259,6 +305,7 @@ export function normalizeOpenCodeMessages(rawMessages: readonly unknown[], prese
     if (Array.isArray(record.files)) {
       for (const file of record.files) items.push(isRecord(file) ? file : { type: "file", value: file })
     }
+    if (shouldDropErroredAssistant(role, info, items)) continue
 
     if (record.type === "shell") {
       const callId = readString(record, "id", "shellID", "shellId") ?? `${messageId}:shell`
@@ -321,6 +368,7 @@ export function normalizeOpenCodeMessages(rawMessages: readonly unknown[], prese
         continue
       }
       if (type === "text") {
+        if (role === "user" && rawPart.ignored === true) continue
         addText(message, messageIndex, partIndex, role, readString(rawPart, "text", "value") ?? "", "text-part")
         continue
       }
@@ -378,6 +426,7 @@ export function normalizeOpenCodeMessages(rawMessages: readonly unknown[], prese
       }
 
       if (isAttachmentType(type)) {
+        if (ignoreAttachment(rawPart)) continue
         const attachment: AttachmentBlock = {
           id: `${messageId}:attachment:${partIndex}`,
           messageId,
