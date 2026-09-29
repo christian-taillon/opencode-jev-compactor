@@ -43,6 +43,29 @@ function retryable(status: number): boolean {
   return status === 429 || status >= 500
 }
 
+function isLoopbackHost(hostname: string): boolean {
+  const value = hostname.toLowerCase().replace(/^\[|\]$/g, "")
+  return value === "localhost" || value === "127.0.0.1" || value === "::1"
+}
+
+function validatedBaseUrl(value: string): string {
+  let url: URL
+  try {
+    url = new URL(value)
+  } catch {
+    throw new JevHttpError("TypeSafe System One baseUrl must be a valid URL")
+  }
+  if (url.username || url.password) {
+    throw new JevHttpError("TypeSafe System One baseUrl must not contain credentials")
+  }
+  if (url.hash) {
+    throw new JevHttpError("TypeSafe System One baseUrl must not contain a URL fragment")
+  }
+  if (url.protocol === "https:") return url.toString()
+  if (url.protocol === "http:" && isLoopbackHost(url.hostname)) return url.toString()
+  throw new JevHttpError("TypeSafe System One baseUrl must use https unless it targets loopback")
+}
+
 async function backoff(attempt: number, signal?: AbortSignal): Promise<void> {
   const delayMs = 100 * (2 ** attempt)
   if (signal?.aborted) throw signal.reason ?? abortError()
@@ -66,6 +89,7 @@ export class JevClient {
 
   async ask(state: JsonValue, questions: Record<string, JevQuestion>, signal?: AbortSignal): Promise<JevBatchResult> {
     const started = performance.now()
+    const requestUrl = validatedBaseUrl(this.options.baseUrl)
     const body: JevRequest = { model: this.options.model, state, questions }
     let lastError: unknown
 
@@ -73,10 +97,12 @@ export class JevClient {
       if (signal?.aborted) throw signal.reason ?? abortError()
       const scoped = combinedSignal(signal, this.options.timeoutMs)
       try {
-        const response = await fetch(this.options.baseUrl, {
+        const response = await fetch(requestUrl, {
           method: "POST",
+          redirect: "error",
           headers: {
             authorization: `Bearer ${this.options.apiKey}`,
+            accept: "application/json",
             "content-type": "application/json",
           },
           body: JSON.stringify(body),

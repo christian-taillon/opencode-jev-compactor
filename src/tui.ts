@@ -6,7 +6,20 @@ interface JevStatus {
   configuredEnabled: boolean
   overrideActive: boolean
   apiKeyConfigured: boolean
+  delivery: "guided-native" | "deterministic" | "observe"
   model: string
+  pluginVersion: string
+  processPid: number
+  instanceId: string
+  setupAt: string
+  locationDirectory: string
+  locationWorkspaceID: string | null
+  modelRequestCount: number
+  lastModelRequestSessionID: string | null
+  lastModelRequestAt: string | null
+  hookInvocations: number
+  lastHookSessionID: string | null
+  lastHookInvocationAt: string | null
   lastRun: string
   history: string
 }
@@ -19,7 +32,20 @@ function parseStatus(value: unknown): JevStatus {
     typeof record.configuredEnabled !== "boolean" ||
     typeof record.overrideActive !== "boolean" ||
     typeof record.apiKeyConfigured !== "boolean" ||
+    (record.delivery !== "guided-native" && record.delivery !== "deterministic" && record.delivery !== "observe") ||
     typeof record.model !== "string" ||
+    typeof record.pluginVersion !== "string" ||
+    !Number.isInteger(record.processPid) ||
+    typeof record.instanceId !== "string" ||
+    typeof record.setupAt !== "string" ||
+    typeof record.locationDirectory !== "string" ||
+    (record.locationWorkspaceID !== null && typeof record.locationWorkspaceID !== "string") ||
+    !Number.isInteger(record.modelRequestCount) ||
+    (record.lastModelRequestSessionID !== null && typeof record.lastModelRequestSessionID !== "string") ||
+    (record.lastModelRequestAt !== null && typeof record.lastModelRequestAt !== "string") ||
+    typeof record.hookInvocations !== "number" ||
+    (record.lastHookSessionID !== null && typeof record.lastHookSessionID !== "string") ||
+    (record.lastHookInvocationAt !== null && typeof record.lastHookInvocationAt !== "string") ||
     typeof record.lastRun !== "string" ||
     typeof record.history !== "string"
   ) throw new Error("Invalid Jev status response")
@@ -53,11 +79,22 @@ export default Plugin.define({
                     title: `Jev Compaction: ${status.enabled ? "ON" : "OFF"}`,
                     message: [
                       `Model: ${status.model}`,
+                      `Delivery: ${status.delivery}`,
+                      `Loaded plugin: ${status.pluginVersion}`,
+                      `Process PID: ${status.processPid}`,
+                      `Plugin instance: ${status.instanceId}`,
+                      `Plugin setup: ${status.setupAt}`,
+                      `Plugin location: ${status.locationDirectory}`,
+                      `Plugin workspace: ${status.locationWorkspaceID ?? "none"}`,
+                      `Compaction model requests (since load): ${status.modelRequestCount}`,
+                      `Last compaction model request: ${status.lastModelRequestAt ?? "never"} (session ${status.lastModelRequestSessionID ?? "none"})`,
+                      `Compaction hook invocations (since load): ${status.hookInvocations}`,
+                      `Last compaction hook invocation: ${status.lastHookInvocationAt ?? "never"} (session ${status.lastHookSessionID ?? "none"})`,
                       `Configured default: ${status.configuredEnabled ? "ON" : "OFF"}`,
                       `Runtime override: ${status.overrideActive ? "active" : "none"}`,
                       `API key: ${status.apiKeyConfigured ? "configured" : "missing"}`,
                       "",
-                      "Last run",
+                      "Last recorded run (historical)",
                       status.lastRun,
                       "",
                       "Previous runs",

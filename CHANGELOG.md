@@ -2,10 +2,71 @@
 
 ## Unreleased
 
+## 0.0.8
+
+Cache-friendly guided native compaction.
+
+- Changed the default delivery mode to `guided-native`: Jev still makes one structured decision pass, but the plugin no longer rewrites historical messages before OpenCode's frontier-model compaction request.
+- Append one chronological system guidance message after the existing transcript, then leave `event.result` unset so OpenCode writes the final structured summary.
+- Preserve the existing request prefix byte-for-byte up to the appended guidance message, allowing provider prompt caching to keep matching the historical prefix where the provider supports prefix caching.
+- Guidance contains only sanitized tool IDs/names and coarse stale/provenance actions. Raw tool inputs/results are never copied into the guidance.
+- Retained `delivery: "deterministic"` as an A/B mode that installs the plugin's exact checkpoint through `event.result` and skips the frontier summary request.
+- Added delivery mode and guided-native guidance size/item metrics to `/jev-status` history.
+- Continue computing the deterministic candidate checkpoint in guided-native mode for comparison diagnostics, without installing it.
+- Documented a four-way local benchmark: native OpenCode, Jev observe, Jev guided-native, and Jev deterministic.
+- Added `delivery: "observe"` to run the full Jev decision pipeline while leaving native OpenCode compaction completely unchanged.
+- Hardened transcript normalization for ignored user text, errored/aborted assistant turns, interrupted tool output, already-compacted tool output, and pseudo-file attachment shapes.
+- Sanitized host-controlled tool IDs/names before placing them in Jev state, Jev instructions, or native guidance.
+- Hardened TypeSafe transport: non-loopback HTTP is rejected, URL credentials/fragments are rejected, and redirects are disabled to protect the bearer token.
+- Added explicit global-vs-project installation guidance and a full local benchmark procedure in `docs/TESTING.md`.
+
+## 0.0.7
+
+Maturity and cost-control improvements for the single-pass design.
+
+- Added a deterministic pruning-capacity preflight before Jev. If the maximum possible policy-approved reduction cannot reach `minReductionRatio`, the plugin falls through to native OpenCode compaction without spending a Jev request.
+- Skip Jev questions for protected-call results that are already at or below `truncateHeadChars`, because truncation would be a no-op.
+- Added maximum-prunable payload, percentage, and eligible-tool diagnostics to run history.
+- Added GitHub Actions CI for install, typecheck, and tests.
+- Fixed the displayed Jev cost prefix in detailed run diagnostics.
+- Kept the one-pass rule unchanged: request-budget batching may create multiple independent API requests, but no Jev answer triggers a dependent second judgment.
+
+## 0.0.6
+
+Single-pass Jev compaction with deterministic safety policy.
+
+- Removed the destructive-action verification round. A compaction run now evaluates each eligible tool only once; request-budget batching may create multiple API requests, but there is no dependent second Jev pass.
+- Moved destructive eligibility into deterministic code. Unknown, incomplete, pinned, and failed tools keep full evidence; mutation/remote-action tools keep call provenance; only an explicit allowlist of cheap read-only tools may be dropped completely.
+- Lowered the default retention threshold to 0.15, matching the observed probability distribution for old tool calls while keeping equality conservative.
+- Removed `verificationThreshold`, `verificationResultPreviewChars`, and `uncertaintyMargin` from the active configuration surface.
+- Added bounded first-pass batch concurrency with `maxConcurrentRequests` (default 2).
+- Preserved verbatim user/assistant text, chronological state fitting, previous-checkpoint baselines, semantic-reduction acceptance, native OpenCode fallback, redaction, and existing run diagnostics.
+- Kept legacy verification fields readable in historical 0.0.5 run records.
+- Pinned `@opencode/plugin` to OpenCode 2.0.14 and verified the compaction hook, RPC, TUI, and storage contracts.
+- Displayed the loaded plugin version and per-load hook invocation count/timestamp separately from historical compaction runs in `/jev-status`.
 - Added conventional root entrypoints so OpenCode 2.0.7 can discover all server, TUI, and RPC features when the repository is configured as a local plugin directory.
 - Mounted TUI keymap registration inside the application slot to ensure the OpenCode keymap provider exists during registration.
 - Made `/jev-status` easier to read with an extra-large dialog, one detailed latest run, and compact previous-run summaries.
 - Documented the 0.0.3 `state-cannot-fit` fallback for transcripts that exceed the single fitted Jev-state ceiling.
+
+## 0.0.5
+
+Simplified Jev compaction architecture informed by practical tool-pruning patterns.
+
+- Replaced separate Jev text/tool/file/constraint scoring surfaces with a chronological conversation projection.
+- Reduced the normal tool decision pass from roughly ten judgments per tool to two independent Noul questions: keep call provenance and keep full result.
+- Added a second destructive-action verification pass for every proposed truncate/drop, using richer candidate evidence and a high verification threshold.
+- Changed the default policy to preserve all user and assistant text verbatim; Jev now focuses on high-volume tool traces.
+- Reduced first-pass tool-result previews from 8,000 characters to 300 characters by default while retaining up to 8,000 characters only for targeted verification.
+- Added aggressive Jev-only state fitting: staged input truncation, old-text abridgement/collapse, compact one-line tool traces, removal of old call-less state entries, and merging of adjacent call-only entries.
+- Tightened the shared request budget to 30,000 estimated tokens and state budget to 24,000.
+- Replaced serialized JSON-to-Markdown reduction as the acceptance metric with semantic payload reduction over conversational text, tool inputs, tool results, and attachment descriptors.
+- Kept serialized reduction as diagnostics only.
+- Added per-tool decision diagnostics including keep-call, keep-result, verification probability, and final action.
+- Added session ID and plugin version to compaction run metrics.
+- Record `preexisting-compaction-result` when another plugin instance or compaction handler has already populated `event.result`, instead of silently returning.
+- Updated the regression suite for ordered state, two-pass verification, text preservation, semantic payload accounting, and richer observability.
+- Candidate-state chunking remains out of scope until the stronger fitting pipeline is validated on real long sessions.
 
 ## 0.0.4
 

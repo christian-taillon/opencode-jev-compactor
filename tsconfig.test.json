@@ -6,7 +6,7 @@
     "noEmit": false,
     "declaration": false,
     "sourceMap": false,
-    "types": []
+    "types": ["node"]
   },
   "include": [
     "src/domain/**/*.ts",
@@ -15,9 +15,10 @@
     "src/jev/**/*.ts",
     "src/policy/**/*.ts",
     "src/compaction/**/*.ts",
+    "src/index.ts",
     "src/plugin/options.ts",
     "src/observability/history.ts",
     "src/observability/json.ts"
   ],
-  "exclude": ["src/index.ts", "src/tui.ts", "src/rpc.ts", "src/tools/**"]
+  "exclude": ["src/tui.ts"]
 }
