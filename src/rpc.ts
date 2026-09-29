@@ -14,7 +14,7 @@ const statusOutput = {
     configuredEnabled: { type: "boolean" as const },
     overrideActive: { type: "boolean" as const },
     apiKeyConfigured: { type: "boolean" as const },
-    delivery: { type: "string" as const, enum: ["guided-native", "deterministic"] as const },
+    delivery: { type: "string" as const, enum: ["guided-native", "deterministic", "observe"] as const },
     model: { type: "string" as const },
     pluginVersion: { type: "string" as const },
     processPid: { type: "integer" as const },
