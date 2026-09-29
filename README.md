@@ -8,11 +8,11 @@ If the plugin cannot produce a valid useful checkpoint, it leaves `event.result`
 
 ## Compatibility
 
-Version `0.0.3` targets **OpenCode 2.0.7** and pins `@opencode/plugin` to `2.0.7`. The server/TUI adapter was checked against the tagged 2.0.7 plugin contracts for RPC, storage, tools, session hooks, and TUI RPC calls.
+Version `0.0.4` targets **OpenCode 2.0.7** and pins `@opencode/plugin` to `2.0.7`. The server/TUI adapter was checked against the tagged 2.0.7 plugin contracts for RPC, storage, tools, session hooks, and TUI RPC calls.
 
 The core compaction engine is deliberately isolated from OpenCode APIs, but the package adapter is version-sensitive. Run both `pnpm typecheck` and `pnpm test` after changing OpenCode/plugin versions.
 
-## 0.0.3 design goal
+## 0.0.4 design goal
 
 The quality objective is not "make the checkpoint as small as possible." It is:
 
@@ -199,7 +199,7 @@ When disabled, the plugin simply leaves the compaction result unset. OpenCode's 
 
 The runtime toggle is stored in plugin-scoped server storage, not only in the terminal UI, so all TUI instances connected to that server observe the same state. `/jev-reset` prevents a forgotten runtime toggle from permanently masking a later configuration change.
 
-For manual human compaction, use OpenCode's native `/compact` or its compaction keybind. Version 0.0.3 intentionally keeps manual compaction native.
+For manual human compaction, use OpenCode's native `/compact` or its compaction keybind. Version 0.0.4 intentionally keeps manual compaction native.
 
 ## Agent-triggered compaction on OpenCode 2.0.7
 
@@ -224,6 +224,33 @@ It sends one small structured state plus independent Jev questions:
 - Score: right relevance
 
 It returns structured JSON. It does not generate prose.
+
+## Semantic acceptance gate
+
+A smaller serialized checkpoint is not sufficient evidence that Jev performed useful compaction. Converting raw OpenCode message JSON into Markdown can reduce bytes and estimated tokens even when every meaningful item was retained.
+
+Version 0.0.4 therefore accepts a Jev checkpoint only when the decisions perform at least one real semantic reduction:
+
+- drop an eligible text block
+- drop a tool item
+- actually shorten a tool result with a truncate decision
+
+If none of those occurs, the plugin returns `fallback (no-semantic-reduction)` and leaves `event.result` unset so OpenCode performs its normal local compaction.
+
+The existing `minReductionRatio` remains a second size-efficiency gate after semantic reduction has been proven. Metrics report semantic actions separately from estimated serialized-size reduction.
+
+## Previous checkpoints and weak follow-ups
+
+Previous `<conversation-checkpoint>` content is parsed into structured baseline sections. On a later compaction, material before that checkpoint is not re-scored and the old checkpoint envelope is never copied verbatim into the new checkpoint. The baseline sections are merged with retained newer state.
+
+Weak follow-ups such as `more`, `continue`, and `more more` are not treated as standalone objectives. Objective resolution is deterministic:
+
+1. newest substantive user request
+2. previous checkpoint objective
+3. newest earlier substantive user request
+4. otherwise fall back to native compaction with `weak-objective-unresolved`
+
+Reasoning parts, system/control records such as effort metadata, raw checkpoint envelopes, and empty placeholder sections are excluded from generated checkpoints.
 
 ## Checkpoint construction
 
@@ -257,13 +284,15 @@ The plugin does not brick the session. It leaves `event.result` unset when:
 - the Jev payload is malformed or incomplete
 - application composition fails
 - everything payload-bearing is pinned and there is nothing useful to prune
-- estimated reduction is below `minReductionRatio`
+- Jev makes no actual semantic reduction (`no-semantic-reduction`)
+- a weak follow-up objective cannot be resolved (`weak-objective-unresolved`)
+- estimated serialized reduction is below `minReductionRatio`
 
 OpenCode then continues with its normal local compaction behavior.
 
-### Large-session limitation in 0.0.3
+### Large-session limitation in 0.0.4
 
-Version 0.0.3 fits one shared Jev state before batching its questions. It does not yet split an oversized transcript into candidate-state windows. Very large transcripts can therefore report `fallback (state-cannot-fit)` without making a Jev request, after which OpenCode performs its normal local compaction. Raising the state limit is not a substitute for candidate-state chunking or multi-pass processing.
+Version 0.0.4 fits one shared Jev state before batching its questions. It does not yet split an oversized transcript into candidate-state windows. Very large transcripts can therefore report `fallback (state-cannot-fit)` without making a Jev request, after which OpenCode performs its normal local compaction. Raising the state limit is not a substitute for candidate-state chunking or multi-pass processing.
 
 ## More frequent compaction
 
@@ -289,7 +318,8 @@ Each run records only metrics, not Jev state contents:
 
 - original estimated context tokens
 - checkpoint estimated tokens
-- estimated fraction removed
+- estimated serialized fraction removed
+- semantic reduction action count
 - fitted state size and fitting stage
 - Jev request count
 - Jev input/output token usage
@@ -342,7 +372,7 @@ corepack pnpm run typecheck
 corepack pnpm test
 ```
 
-The test suite covers options, pinning, native v2 tool-message normalization, configurable Jev previews, staged state fitting, secret redaction, conservative tool policy, disposal proof, uncertainty behavior, exact checkpoint retention, reduction gating, malformed Jev responses, tool-heavy pruning, already-short fallback, Jev failure fallback, state-too-large fallback, deterministic/idempotent decisions, and bounded metrics history.
+The test suite covers options, pinning, native v2 tool-message normalization, prior-checkpoint parsing, reasoning/control filtering, weak-objective resolution, semantic-reduction gating, configurable Jev previews, staged state fitting, secret redaction, conservative tool policy, disposal proof, uncertainty behavior, exact checkpoint retention, reduction gating, malformed Jev responses, tool-heavy pruning, already-short fallback, Jev failure fallback, state-too-large fallback, deterministic/idempotent decisions, and bounded metrics history.
 
 ## References
 

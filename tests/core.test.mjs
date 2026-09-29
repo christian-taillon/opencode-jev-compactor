@@ -3,6 +3,7 @@ import assert from "node:assert/strict"
 import { readFile } from "node:fs/promises"
 
 import { normalizeOpenCodeMessages } from "../.test-dist/src/transcript/normalize.js"
+import { isWeakFollowUp, parseCheckpointMarkdown, resolveObjective } from "../.test-dist/src/transcript/checkpoint-state.js"
 import { buildJevState } from "../.test-dist/src/state/build.js"
 import { fitState } from "../.test-dist/src/state/fit.js"
 import { redactSecrets } from "../.test-dist/src/state/redact.js"
@@ -67,6 +68,31 @@ const aggressiveDiscardAsker = {
   },
 }
 
+function keepEverythingAnswer(id, question) {
+  if (question.type === "noul") {
+    if (id.includes("safe_to_discard") || id.includes("superseded")) return { type: "noul", noul: 0.05 }
+    return { type: "noul", noul: 0.95 }
+  }
+  if (question.type === "score") return scoreAnswer(4)
+  const keys = Object.keys(question.criteria)
+  if (keys.includes("keep_full")) return choiceAnswer(question, "keep_full")
+  if (keys.includes("active")) return choiceAnswer(question, "active")
+  return choiceAnswer(question, keys[0])
+}
+
+const keepEverythingAsker = {
+  async ask(_state, questions) {
+    return {
+      response: {
+        model: "jev-latest",
+        answers: Object.fromEntries(Object.entries(questions).map(([id, question]) => [id, keepEverythingAnswer(id, question)])),
+        usage: { input_tokens: 1000, output_tokens: 0 },
+      },
+      latencyMs: 3,
+    }
+  },
+}
+
 const composeOptions = {
   keepThreshold: DEFAULT_OPTIONS.keepThreshold,
   exactEvidenceThreshold: DEFAULT_OPTIONS.exactEvidenceThreshold,
@@ -76,7 +102,7 @@ const composeOptions = {
   minConfidence: DEFAULT_OPTIONS.minConfidence,
 }
 
-test("0.0.3 options expose quality-first thresholds with safe validation", () => {
+test("0.0.4 options expose quality-first thresholds with safe validation", () => {
   const parsed = parseOptions({
     enabled: false,
     keepThreshold: 0.4,
@@ -132,6 +158,60 @@ test("normalizer accepts native OpenCode v2 assistant tool-state messages", () =
   assert.match(transcript.attachments[0].descriptor, /path=\/tmp\/project\/build\.ts/)
 })
 
+test("checkpoint parser extracts structured baseline without preserving the envelope", () => {
+  const parsed = parseCheckpointMarkdown(`
+## Objective
+\`\`\`text
+Continue the architecture explanation.
+\`\`\`
+
+## Decisions
+- Do not repeat earlier material.
+
+## Kept evidence
+- exact value 42
+`)
+  assert.ok(parsed)
+  assert.equal(parsed.objective, "Continue the architecture explanation.")
+  assert.equal(parsed.sections.Decisions, "- Do not repeat earlier material.")
+  assert.equal(parsed.sections["Kept evidence"], "- exact value 42")
+})
+
+test("normalizer treats prior checkpoint as baseline and excludes reasoning/control/old transcript", async () => {
+  const raw = await fixture("false-positive-session.json")
+  const transcript = normalizeOpenCodeMessages(raw, 0)
+  assert.equal(
+    transcript.previousCheckpoint?.objective,
+    "Continue explaining the assistant’s architecture, capabilities, limitations, and alignment without repeating previously covered material.",
+  )
+  const allText = transcript.textBlocks.map((block) => block.text).join("\n")
+  assert.doesNotMatch(allText, /Old material that should be represented only by the completed checkpoint/)
+  assert.doesNotMatch(allText, /Planning discussion/)
+  assert.doesNotMatch(allText, /conversation-checkpoint/)
+  assert.doesNotMatch(allText, /\"type\"\s*:\s*\"effort\"/)
+  assert.equal(transcript.textBlocks.some((block) => block.source === "reasoning"), false)
+  assert.equal(transcript.messages.some((message) => message.id === "old-user"), false)
+})
+
+test("weak follow-ups resolve to previous checkpoint objective before newer weak prompts", async () => {
+  assert.equal(isWeakFollowUp("more more"), true)
+  assert.equal(isWeakFollowUp("continue"), true)
+  assert.equal(isWeakFollowUp("continue implementing src/index.ts"), false)
+
+  const raw = await fixture("false-positive-session.json")
+  const transcript = normalizeOpenCodeMessages(raw, 0)
+  const objective = resolveObjective(transcript)
+  assert.equal(objective?.source, "previous-checkpoint")
+  assert.equal(
+    objective?.text,
+    "Continue explaining the assistant’s architecture, capabilities, limitations, and alignment without repeating previously covered material.",
+  )
+  const built = buildJevState(transcript, { toolResultPreviewChars: 8000 })
+  assert.equal(built.state.goal, objective?.text)
+  assert.equal(built.state.baseline?.sections.Decisions, "- Explain new architectural layers rather than restating earlier sections.")
+  assert.equal(built.state.textBlocks.some((block) => /conversation-checkpoint/.test(block.text)), false)
+})
+
 test("Jev tool-result preview length is configurable without changing original local result", () => {
   const raw = [
     { id: "m0", role: "user", content: [{ type: "text", text: "inspect" }] },
@@ -182,7 +262,7 @@ function buildToolCompositionHarness() {
   assert.ok(ids)
   const base = Object.fromEntries(Object.entries(plan.questions).map(([id, question]) => [id, aggressiveDiscardAnswer(id, question)]))
   const decide = (overrides) => composeDecisions(
-    transcript, built.state, built.constraints, built.files, plan, { ...base, ...overrides }, composeOptions,
+    transcript, built.state, built.objective, built.constraints, built.files, plan, { ...base, ...overrides }, composeOptions,
   ).tools.find((item) => item.toolCallId === "t1").decision
   return { ids, plan, decide }
 }
@@ -232,6 +312,29 @@ test("checkpoint keeps retained text verbatim and truncates tool result by exact
   assert.match(summary, /checkpoint truncation:/)
 })
 
+test("checkpoint reassembles prior structured state without empty placeholders or raw envelope", async () => {
+  const raw = await fixture("false-positive-session.json")
+  const transcript = normalizeOpenCodeMessages(raw, 0)
+  const objective = resolveObjective(transcript)
+  assert.ok(objective)
+  const summary = assembleCheckpoint(transcript, [], [], {
+    objectiveText: objective.text,
+    tools: [],
+    texts: transcript.textBlocks
+      .filter((block) => block.checkpointEligible)
+      .map((block) => ({ textId: block.id, keep: true, category: "active", reason: "jev" })),
+    constraints: [],
+    files: [],
+  }, { truncateHeadChars: 600 })
+  assert.match(summary, /## Objective/)
+  assert.match(summary, /Continue explaining the assistant’s architecture/)
+  assert.match(summary, /## Decisions[\s\S]*Explain new architectural layers/)
+  assert.match(summary, /## Completed[\s\S]*Covered the basic model\/runtime distinction/)
+  assert.doesNotMatch(summary, /None retained/)
+  assert.doesNotMatch(summary, /conversation-checkpoint/)
+  assert.doesNotMatch(summary, /Planning discussion/)
+})
+
 test("reduction gate interprets ratio as fraction removed", () => {
   assert.equal(reductionGate(1000, 800, 0.15).sufficient, true)
   assert.equal(reductionGate(1000, 900, 0.15).sufficient, false)
@@ -251,6 +354,34 @@ test("tool-heavy engine can prune stale traces and records tiny Jev estimated co
   assert.equal(outcome.checkpoint.stats.estimatedJevCostUsd, outcome.checkpoint.stats.jevInputTokens / 1_000_000 * 0.042)
   assert.ok(outcome.checkpoint.summary.includes("Do not target v1. Next, wire the v2 compaction hook."))
   assert.ok(!outcome.checkpoint.summary.includes("OLD CLIENT"))
+})
+
+test("false-positive serialization shrink falls back when Jev makes no semantic reduction", async () => {
+  const raw = await fixture("false-positive-session.json")
+  const outcome = await compactTranscript(raw, keepEverythingAsker, {
+    ...DEFAULT_OPTIONS,
+    preserveRecentMessages: 0,
+    minReductionRatio: 0,
+    timeoutMs: 1000,
+  })
+  assert.equal(outcome.status, "fallback")
+  assert.equal(outcome.reason, "no-semantic-reduction")
+  assert.equal(outcome.stats.semanticReductionActions, 0)
+  assert.equal(outcome.stats.toolsDropped, 0)
+  assert.equal(outcome.stats.toolsTruncated, 0)
+  assert.equal(outcome.stats.textsDropped, 0)
+})
+
+test("weak objective with no checkpoint or substantive user request falls back before Jev", async () => {
+  let calls = 0
+  const outcome = await compactTranscript(
+    [{ id: "u1", role: "user", content: [{ type: "text", text: "more" }] }],
+    { async ask() { calls += 1; throw new Error("should not be called") } },
+    { ...DEFAULT_OPTIONS, preserveRecentMessages: 0, timeoutMs: 1000 },
+  )
+  assert.equal(outcome.status, "fallback")
+  assert.equal(outcome.reason, "weak-objective-unresolved")
+  assert.equal(calls, 0)
 })
 
 test("already-short session safely falls back", async () => {
@@ -298,7 +429,7 @@ test("history is bounded and formats useful metrics", () => {
     originalEstimatedTokens: 100000, checkpointEstimatedTokens: 20000, removedFraction: 0.8, remainingRatio: 0.2,
     fittedStateEstimatedTokens: 20000, fittedStateChars: 70000, fitStage: "none", jevRequests: 3, jevInputTokens: 60000,
     jevOutputTokens: 0, jevLatencyMs: 900, estimatedJevCostUsd: 0.00252, toolsScored: 20, toolsKeptFull: 4,
-    toolsTruncated: 6, toolsDropped: 10, textsScored: 10, textsKept: 5, textsDropped: 5, redactions: 0,
+    toolsTruncated: 6, toolsDropped: 10, textsScored: 10, textsKept: 5, textsDropped: 5, semanticReductionActions: 15, redactions: 0,
   }
   const history = appendHistory(
     [makeRunRecord("ok", null, stats, "2026-01-01T00:00:00Z"), makeRunRecord("ok", null, stats, "2026-01-02T00:00:00Z")],

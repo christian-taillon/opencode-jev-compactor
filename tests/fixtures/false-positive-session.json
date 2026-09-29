@@ -1,0 +1,76 @@
+[
+  {
+    "id": "old-user",
+    "role": "user",
+    "content": [
+      {
+        "type": "text",
+        "text": "Explain the assistant architecture and alignment model in detail."
+      }
+    ]
+  },
+  {
+    "id": "old-assistant",
+    "role": "assistant",
+    "content": [
+      {
+        "type": "text",
+        "text": "Old material that should be represented only by the completed checkpoint."
+      }
+    ]
+  },
+  {
+    "id": "checkpoint",
+    "role": "system",
+    "content": [
+      {
+        "type": "text",
+        "text": "<conversation-checkpoint>\n## Objective\n```text\nContinue explaining the assistant’s architecture, capabilities, limitations, and alignment without repeating previously covered material.\n```\n\n## Decisions\n- Explain new architectural layers rather than restating earlier sections.\n\n## Completed\n- Covered the basic model/runtime distinction.\n\n## Active work\n- Continue with alignment and tool boundaries.\n</conversation-checkpoint>"
+      }
+    ]
+  },
+  {
+    "id": "u1",
+    "role": "user",
+    "content": [
+      { "type": "text", "text": "more" }
+    ]
+  },
+  {
+    "id": "a1",
+    "role": "assistant",
+    "content": [
+      { "type": "reasoning", "text": "Planning discussion that must never appear in a checkpoint." },
+      { "type": "effort", "value": "high" },
+      { "type": "text", "text": "The runtime can expose tools while the model itself remains stateless between requests unless context is supplied." }
+    ]
+  },
+  {
+    "id": "u2",
+    "role": "user",
+    "content": [
+      { "type": "text", "text": "continue" }
+    ]
+  },
+  {
+    "id": "a2",
+    "role": "assistant",
+    "content": [
+      { "type": "text", "text": "Alignment behavior is produced by training, instructions, policy enforcement, and runtime controls rather than one single guardrail." }
+    ]
+  },
+  {
+    "id": "u3",
+    "role": "user",
+    "content": [
+      { "type": "text", "text": "more more" }
+    ]
+  },
+  {
+    "id": "a3",
+    "role": "assistant",
+    "content": [
+      { "type": "text", "text": "Tool access is separately mediated by the host application and does not imply unrestricted model authority." }
+    ]
+  }
+]

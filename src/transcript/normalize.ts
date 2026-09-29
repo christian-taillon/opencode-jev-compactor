@@ -1,12 +1,14 @@
 import type {
   AttachmentBlock,
   NormalizedTranscript,
+  PreviousCheckpoint,
   Role,
   TextBlock,
   ToolCall,
   ToolResult,
   TranscriptMessage,
 } from "../domain/types.js"
+import { extractCheckpointEnvelope, isWeakFollowUp, parseCheckpointMarkdown } from "./checkpoint-state.js"
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value)
@@ -31,9 +33,26 @@ function messageRole(record: Record<string, unknown>): Role {
   const type = readString(record, "type")
   if (type === "user") return "user"
   if (type === "assistant") return "assistant"
-  if (type === "system" || type === "synthetic" || type === "skill") return "system"
+  if (type === "system" || type === "synthetic" || type === "skill" || type === "compaction") return "system"
   if (type === "shell" || type === "tool") return "tool"
   return "unknown"
+}
+
+const CONTROL_TYPES = new Set([
+  "effort",
+  "metadata",
+  "usage",
+  "token-usage",
+  "token_usage",
+  "step-start",
+  "step_start",
+  "step-finish",
+  "step_finish",
+])
+
+function isControlRecord(record: Record<string, unknown>): boolean {
+  const type = readString(record, "type")
+  return type !== undefined && CONTROL_TYPES.has(type)
 }
 
 export function safeStringify(value: unknown): string {
@@ -154,6 +173,40 @@ export function normalizeOpenCodeMessages(rawMessages: readonly unknown[], prese
   const attachments: AttachmentBlock[] = []
   const toolCalls: ToolCall[] = []
   const toolResults: ToolResult[] = []
+  let previousCheckpoint: PreviousCheckpoint | undefined
+
+  const recordCheckpoint = (messageIndex: number, parsed: Omit<PreviousCheckpoint, "messageIndex"> | undefined) => {
+    if (!parsed) return
+    if (!previousCheckpoint || messageIndex >= previousCheckpoint.messageIndex) {
+      previousCheckpoint = { messageIndex, ...parsed }
+    }
+  }
+
+  const addText = (
+    message: TranscriptMessage,
+    messageIndex: number,
+    partIndex: number,
+    role: Role,
+    rawText: string,
+    source: TextBlock["source"],
+  ) => {
+    const extracted = extractCheckpointEnvelope(rawText)
+    recordCheckpoint(messageIndex, extracted.checkpoint)
+    const value = extracted.remainder
+    if (!value || role === "system" || source === "reasoning") return
+    const text: TextBlock = {
+      id: `${message.id}:${source === "content" ? "text" : source}:${partIndex}`,
+      messageId: message.id,
+      messageIndex,
+      role,
+      text: value,
+      source,
+      pinned: false,
+      checkpointEligible: role !== "user" || !isWeakFollowUp(value),
+    }
+    textBlocks.push(text)
+    message.textBlocks.push(text)
+  }
 
   for (let messageIndex = 0; messageIndex < rawMessages.length; messageIndex += 1) {
     const raw = rawMessages[messageIndex]
@@ -170,6 +223,10 @@ export function normalizeOpenCodeMessages(rawMessages: readonly unknown[], prese
       toolResultIds: [],
       hasUnknownParts: false,
       pinned: false,
+    }
+
+    if (record.type === "compaction" && typeof record.summary === "string") {
+      recordCheckpoint(messageIndex, parseCheckpointMarkdown(record.summary))
     }
 
     const items = contentItems(record)
@@ -210,13 +267,21 @@ export function normalizeOpenCodeMessages(rawMessages: readonly unknown[], prese
     for (let partIndex = 0; partIndex < items.length; partIndex += 1) {
       const rawPart = items[partIndex]
       if (typeof rawPart === "string") {
-        const text: TextBlock = { id: `${messageId}:text:${partIndex}`, messageId, messageIndex, role, text: rawPart, source: "content", pinned: false }
-        textBlocks.push(text)
-        message.textBlocks.push(text)
+        addText(message, messageIndex, partIndex, role, rawPart, "content")
         continue
       }
       if (!isRecord(rawPart)) {
-        const text: TextBlock = { id: `${messageId}:unknown:${partIndex}`, messageId, messageIndex, role, text: safeStringify(rawPart), source: "unknown-part", pinned: true }
+        if (role === "system") continue
+        const text: TextBlock = {
+          id: `${messageId}:unknown:${partIndex}`,
+          messageId,
+          messageIndex,
+          role,
+          text: safeStringify(rawPart),
+          source: "unknown-part",
+          pinned: true,
+          checkpointEligible: true,
+        }
         textBlocks.push(text)
         message.textBlocks.push(text)
         message.hasUnknownParts = true
@@ -224,21 +289,10 @@ export function normalizeOpenCodeMessages(rawMessages: readonly unknown[], prese
       }
 
       const type = readString(rawPart, "type") ?? "unknown"
-      if (type === "text" || type === "reasoning") {
-        const value = readString(rawPart, "text", "value") ?? ""
-        if (value.length > 0) {
-          const text: TextBlock = {
-            id: `${messageId}:${type}:${partIndex}`,
-            messageId,
-            messageIndex,
-            role,
-            text: value,
-            source: type === "reasoning" ? "reasoning" : "text-part",
-            pinned: false,
-          }
-          textBlocks.push(text)
-          message.textBlocks.push(text)
-        }
+      if (CONTROL_TYPES.has(type)) continue
+      if (type === "reasoning") continue
+      if (type === "text") {
+        addText(message, messageIndex, partIndex, role, readString(rawPart, "text", "value") ?? "", "text-part")
         continue
       }
 
@@ -307,14 +361,40 @@ export function normalizeOpenCodeMessages(rawMessages: readonly unknown[], prese
         continue
       }
 
-      const unknown: TextBlock = { id: `${messageId}:unknown:${partIndex}`, messageId, messageIndex, role, text: safeStringify(rawPart), source: "unknown-part", pinned: true }
+      if (role === "system") continue
+      const unknown: TextBlock = {
+        id: `${messageId}:unknown:${partIndex}`,
+        messageId,
+        messageIndex,
+        role,
+        text: safeStringify(rawPart),
+        source: "unknown-part",
+        pinned: true,
+        checkpointEligible: true,
+      }
       textBlocks.push(unknown)
       message.textBlocks.push(unknown)
       message.hasUnknownParts = true
     }
 
-    if (message.textBlocks.length === 0 && message.attachmentBlocks.length === 0 && message.toolCallIds.length === 0 && message.toolResultIds.length === 0 && role === "unknown") {
-      const unknown: TextBlock = { id: `${messageId}:unknown-message`, messageId, messageIndex, role, text: safeStringify(record), source: "unknown-part", pinned: true }
+    if (
+      message.textBlocks.length === 0 &&
+      message.attachmentBlocks.length === 0 &&
+      message.toolCallIds.length === 0 &&
+      message.toolResultIds.length === 0 &&
+      role === "unknown" &&
+      !isControlRecord(record)
+    ) {
+      const unknown: TextBlock = {
+        id: `${messageId}:unknown-message`,
+        messageId,
+        messageIndex,
+        role,
+        text: safeStringify(record),
+        source: "unknown-part",
+        pinned: true,
+        checkpointEligible: true,
+      }
       textBlocks.push(unknown)
       message.textBlocks.push(unknown)
       message.hasUnknownParts = true
@@ -322,8 +402,15 @@ export function normalizeOpenCodeMessages(rawMessages: readonly unknown[], prese
     messages.push(message)
   }
 
-  const callsById = new Map(toolCalls.map((call) => [call.id, call] as const))
-  for (const result of toolResults) {
+  const baselineIndex = previousCheckpoint?.messageIndex ?? -1
+  const activeMessages = messages.filter((message) => message.index > baselineIndex)
+  const activeTextBlocks = textBlocks.filter((block) => block.messageIndex > baselineIndex)
+  const activeAttachments = attachments.filter((attachment) => attachment.messageIndex > baselineIndex)
+  const activeToolCalls = toolCalls.filter((call) => call.messageIndex > baselineIndex)
+  const activeToolResults = toolResults.filter((result) => result.messageIndex > baselineIndex)
+
+  const callsById = new Map(activeToolCalls.map((call) => [call.id, call] as const))
+  for (const result of activeToolResults) {
     const call = callsById.get(result.toolCallId)
     if (call) {
       call.result = result
@@ -338,11 +425,18 @@ export function normalizeOpenCodeMessages(rawMessages: readonly unknown[], prese
       pinned: result.pinned,
       result,
     }
-    toolCalls.push(synthetic)
+    activeToolCalls.push(synthetic)
     callsById.set(synthetic.id, synthetic)
   }
 
-  const transcript: NormalizedTranscript = { messages, textBlocks, attachments, toolCalls, toolResults }
+  const transcript: NormalizedTranscript = {
+    messages: activeMessages,
+    textBlocks: activeTextBlocks,
+    attachments: activeAttachments,
+    toolCalls: activeToolCalls,
+    toolResults: activeToolResults,
+    ...(previousCheckpoint ? { previousCheckpoint } : {}),
+  }
   pinTranscript(transcript, preserveRecentMessages)
   return transcript
 }
