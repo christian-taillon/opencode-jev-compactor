@@ -23,6 +23,7 @@
     "rpc.ts",
     "src",
     "example",
+    "docs",
     "README.md",
     "CHANGELOG.md",
     "LICENSE"
