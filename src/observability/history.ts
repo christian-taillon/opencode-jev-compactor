@@ -35,7 +35,7 @@ function decisionLines(stats: CompactionStats): string[] {
 export function formatRun(record: CompactionRunRecord): string {
   const stats = record.stats
   const delivery = stats.delivery ?? "legacy"
-  const sizeLine = delivery === "guided-native"
+  const sizeLine = delivery === "guided-native" || delivery === "observe"
     ? `context ${stats.originalEstimatedTokens.toLocaleString()} tokens; deterministic candidate ${stats.checkpointEstimatedTokens.toLocaleString()} tokens; native guidance ${(stats.nativeGuidanceChars ?? 0).toLocaleString()} chars / ${stats.nativeGuidanceItems ?? 0} item(s)`
     : `context ${stats.originalEstimatedTokens.toLocaleString()} -> checkpoint ${stats.checkpointEstimatedTokens.toLocaleString()} tokens; serialized reduction ${((stats.removedFraction ?? 0) * 100).toFixed(1)}%`
   const lines = [
