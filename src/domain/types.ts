@@ -159,7 +159,7 @@ export interface ToolDecisionDiagnostic {
   verification?: number
 }
 
-export type CompactionDelivery = "guided-native" | "deterministic" | "observe"
+export type CompactionDelivery = "guided-native" | "observe"
 
 export interface CompactionStats {
   sessionID?: string
