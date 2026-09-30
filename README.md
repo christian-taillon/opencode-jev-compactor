@@ -92,7 +92,7 @@ The plugin:
 
 ## Install from a checkout
 
-No npm publication or OpenCode version pin is required.
+No npm publication or OpenCode version pin is required. Build the JavaScript artifact locally before loading it in OpenCode.
 
 ```sh
 cd ~/github/opencode-jev-compactor
@@ -100,6 +100,7 @@ git switch main
 git pull --ff-only
 corepack pnpm install
 corepack pnpm run typecheck
+corepack pnpm run build
 corepack pnpm test
 ```
 
@@ -120,7 +121,7 @@ Then add the plugin to OpenCode config:
   },
   "plugin": [
     [
-      "file:///home/christian/github/opencode-jev-compactor/src/index.ts",
+      "file:///home/christian/github/opencode-jev-compactor/dist/index.js",
       {
         "enabled": true,
         "delivery": "observe",
