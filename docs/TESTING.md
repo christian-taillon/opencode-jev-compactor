@@ -16,6 +16,7 @@ git switch main
 git pull --ff-only
 corepack pnpm install
 corepack pnpm run typecheck
+corepack pnpm run build
 corepack pnpm test
 ```
 
@@ -30,7 +31,7 @@ Use the checkout directly in OpenCode config:
 ```jsonc
 "plugin": [
   [
-    "file:///home/christian/github/opencode-jev-compactor/src/index.ts",
+    "file:///home/christian/github/opencode-jev-compactor/dist/index.js",
     {
       "enabled": true,
       "delivery": "observe",
