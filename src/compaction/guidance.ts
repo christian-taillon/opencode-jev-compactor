@@ -16,12 +16,10 @@ function line(item: ToolDecisionDiagnostic): string {
 }
 
 /**
- * Builds a small operator-authored instruction appended after the existing
- * transcript and before OpenCode's native summary prompt.
+ * Builds a small operator-authored instruction for OpenCode's native
+ * compaction context.
  *
- * It deliberately contains no tool inputs or outputs. The existing request
- * prefix remains unchanged, preserving provider prompt-cache reuse where the
- * provider supports prefix caching.
+ * It deliberately contains no raw tool inputs, outputs, or Jev probabilities.
  */
 export function buildNativeCompactionGuidance(stats: CompactionStats): NativeCompactionGuidance | undefined {
   const destructive = (stats.toolDecisionDiagnostics ?? []).filter((item) => item.action !== "keep_full")
@@ -70,21 +68,5 @@ export function buildNativeCompactionGuidance(stats: CompactionStats): NativeCom
     dropped: dropped.length,
     provenanceOnly: provenanceOnly.length,
     omittedItems,
-  }
-}
-
-/**
- * A chronological system message is intentionally appended to event.messages,
- * not event.system. Appending keeps the pre-existing provider request prefix
- * byte-for-byte stable up to the new guidance message.
- */
-export function nativeGuidanceMessage(text: string) {
-  return {
-    role: "system" as const,
-    content: [{ type: "text" as const, text }],
-    metadata: {
-      source: "opencode.jev-compaction",
-      kind: "native-compaction-guidance",
-    },
   }
 }
