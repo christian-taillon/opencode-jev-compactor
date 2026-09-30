@@ -233,7 +233,7 @@ function pinTranscript(transcript: NormalizedTranscript, preserveRecentMessages:
   for (const result of transcript.toolResults) result.pinned = result.pinned || pinnedMessageIds.has(result.messageId)
 }
 
-/** Raw OpenCode v2 messages are isolated at this boundary and normalized into stable domain types. */
+/** Raw OpenCode message/part shapes are isolated at this boundary and normalized into stable domain types. */
 export function normalizeOpenCodeMessages(rawMessages: readonly unknown[], preserveRecentMessages: number): NormalizedTranscript {
   const messages: TranscriptMessage[] = []
   const textBlocks: TextBlock[] = []
@@ -384,8 +384,8 @@ export function normalizeOpenCodeMessages(rawMessages: readonly unknown[], prese
 
       if (type === "tool" && isRecord(rawPart.state)) {
         const state = rawPart.state
-        const id = readString(rawPart, "id", "toolCallId", "tool_call_id") ?? `${messageId}:tool:${partIndex}`
-        const toolName = readString(rawPart, "name", "toolName", "tool_name") ?? "unknown_tool"
+        const id = readString(rawPart, "callID", "callId", "toolCallId", "tool_call_id", "id") ?? `${messageId}:tool:${partIndex}`
+        const toolName = readString(rawPart, "tool", "name", "toolName", "tool_name") ?? "unknown_tool"
         const call: ToolCall = { id, messageId, messageIndex, toolName, inputText: safeStringify(state.input), pinned: false }
         toolCalls.push(call)
         message.toolCallIds.push(id)
