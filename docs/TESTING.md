@@ -1,43 +1,41 @@
 # Local validation and benchmark
 
-This document is the pre-merge/runtime validation plan for OpenCode Jev Compaction 0.0.8.
+This is the runtime validation plan for OpenCode Jev Compaction 0.1.0 on **OpenCode latest stable**.
 
-The goal is not simply to maximize bytes removed. The goal is to compare **total cost, prompt-cache behavior, checkpoint size, and continuation quality** across the available compaction paths.
+The metric is total cost and continuation quality, not merely bytes removed at the compaction boundary.
 
 ## Preconditions
 
-The repository checkout should be current and green:
+Update and validate the checkout:
 
 ```sh
-cd /home/christian/github/opencode-jev-compactor
+cd ~/github/opencode-jev-compactor
 git switch main
-git pull
-
+git pull --ff-only
 corepack pnpm install
 corepack pnpm run typecheck
 corepack pnpm test
 ```
 
-The OpenCode server process needs:
+The OpenCode process needs:
 
 ```sh
 export TYPESAFE_API_KEY='...'
 ```
 
-The recommended OpenCode global config location is:
-
-```text
-~/.config/opencode/opencode.jsonc
-```
-
-Point the plugin directly at the checkout:
+Example global plugin configuration:
 
 ```jsonc
 {
-  "plugins": [
-    {
-      "package": "/home/christian/github/opencode-jev-compactor",
-      "options": {
+  "compaction": {
+    "auto": true,
+    "keep": { "tokens": 15000 },
+    "buffer": 30000
+  },
+  "plugin": [
+    [
+      "file:///home/christian/github/opencode-jev-compactor",
+      {
         "enabled": true,
         "delivery": "observe",
         "model": "jev-latest",
@@ -51,74 +49,45 @@ Point the plugin directly at the checkout:
         "maxRequestTokens": 30000,
         "maxConcurrentRequests": 2,
         "timeoutMs": 6000,
-        "enableCompareTool": true,
         "historyLimit": 10
       }
-    }
+    ]
   ]
 }
 ```
 
-Keep native OpenCode compaction scheduling unchanged while comparing modes:
+Restart OpenCode after changing the plugin checkout or config.
 
-```jsonc
-"compaction": {
-  "auto": true,
-  "keep": { "tokens": 15000 },
-  "buffer": 30000
-}
-```
+## Pick a representative session
 
-Restart the OpenCode server/service after changing plugin code or configuration.
-
-## Choose a representative session
-
-Prefer a real, long coding session with:
+Use a real coding session with:
 
 - several read/grep/glob operations
 - at least one shell or mutation operation
 - completed work that should not be repeated
-- exact identifiers, file paths, errors, or commands worth preserving
-- a current objective that changed at least once
-- enough context for native compaction to be meaningful
+- exact file paths, errors, commands, or identifiers worth preserving
+- enough history for native compaction to be meaningful
 
-For a fair comparison, fork from the same user-turn boundary before compaction rather than using `/undo` as a selective checkpoint remover.
+When comparing runs, fork from the same pre-compaction boundary if possible.
 
-## Mode 0: native baseline
+## Arm 1: native OpenCode
 
-Disable Jev:
-
-```text
-/jev-toggle
-```
-
-Confirm:
-
-```text
-/jev-status
-```
-
-Then:
-
-```text
-/compact
-```
+Remove/disable the plugin and run native compaction.
 
 Record:
 
-- selected compaction model
+- OpenCode version
+- compaction model
 - input tokens
 - cache-read tokens
-- cache-write tokens, when the provider reports them
+- cache-write tokens when reported
 - output tokens
 - latency
-- final checkpoint/continuation size
-- whether the next response preserves key facts
-- unnecessary tool re-runs or re-reading
+- resulting continuation/checkpoint size
+- whether important facts survive
+- unnecessary re-reads or repeated tool work on the next turn
 
-This is the baseline.
-
-## Mode 1: observe
+## Arm 2: observe
 
 Set:
 
@@ -126,38 +95,27 @@ Set:
 "delivery": "observe"
 ```
 
-Enable Jev and restart the service.
+Observe runs the full Jev decision pipeline but does not modify `output.context` or `output.prompt`. OpenCode therefore receives its normal native compaction prompt.
 
-Observe mode runs the complete Jev decision pipeline but intentionally leaves both `event.messages` and `event.result` untouched. OpenCode should therefore perform exactly its normal native compaction.
-
-Run:
+Run compaction and inspect OpenCode logs for service:
 
 ```text
-/jev-status
-/compact
-/jev-status
-```
-
-Expected last-run reason on a useful tool-heavy session:
-
-```text
-ok (observe-only)
+opencode.jev-compaction
 ```
 
 Record:
 
-- Jev fitted-state tokens
+- Jev state size/stage
 - Jev request count
 - Jev input tokens and estimated cost
-- maximum prunable percentage
-- keep/truncate/drop decisions
+- maximum prunable fraction
+- keep/provenance/drop decisions
 - projected guidance size
-- native compaction cache-read/cache-write/input/output tokens
-- final native checkpoint size
+- native model input/cache/output metrics
 
-Observe mode is the safest place to inspect whether the default `0.15` retention threshold produces sensible decisions before allowing Jev guidance to affect a summary.
+Use this arm to validate the `0.15` retention threshold before letting Jev affect the native summary.
 
-## Mode 2: guided-native
+## Arm 3: guided-native
 
 Set:
 
@@ -165,129 +123,75 @@ Set:
 "delivery": "guided-native"
 ```
 
-Restart and run:
+The plugin should:
 
-```text
-/jev-status
-/compact
-/jev-status
-```
+1. fetch the current session through the OpenCode SDK client
+2. make one Jev decision stage
+3. append one `<jev-compaction-guidance>` block through `output.context`
+4. leave `output.prompt` unset
+5. let OpenCode perform the normal frontier-model compaction
 
-Expected last-run reason:
+Record the same metrics as observe.
 
-```text
-ok (native-guidance)
-```
+The cache hypothesis is:
 
-Expected request behavior:
+> Appending compaction context after the serialized conversation should preserve the same historical provider prefix available to native compaction.
 
-- existing historical messages remain in the same order
-- one small system guidance message is appended
-- `event.result` remains unset
-- OpenCode performs its native frontier-model summary request
-
-Record the same metrics as observe mode.
-
-The key cache hypothesis is:
-
-> Because guided-native appends after the old transcript instead of rewriting earlier messages, the provider should be able to reuse the same historical prompt prefix that native compaction could reuse.
-
-Do not assume this is true merely because the request shape permits it. Verify actual provider cache-read/cache-write counters.
-
-## Mode 3: deterministic
-
-Set:
-
-```jsonc
-"delivery": "deterministic"
-```
-
-Restart and run:
-
-```text
-/jev-status
-/compact
-/jev-status
-```
-
-Expected behavior:
-
-- the plugin sets `event.result`
-- the native frontier summary request is skipped
-- the deterministic checkpoint is installed directly
-
-Record:
-
-- Jev cost and latency
-- deterministic checkpoint token estimate
-- next-turn input/cache behavior
-- continuation quality
-- unnecessary tool re-runs
+Verify this using actual cache-read/cache-write counters. Do not infer it only from request structure.
 
 ## Quality checklist
 
-For every resulting checkpoint/continuation, test whether the next model still knows:
+After each arm, ask the next model to continue the task and verify that it still knows:
 
-- the current objective
-- user constraints and explicit preferences
-- important decisions already made
+- current objective
+- user constraints and preferences
+- important decisions
 - work already completed
-- active blockers or errors
+- active blockers/errors
 - relevant files
 - exact commands/identifiers needed to continue
-- the next intended step
+- next intended step
 
-Also check whether it unnecessarily carries:
+Also check whether the summary unnecessarily carries:
 
 - stale read/grep/glob output
 - repeated raw tool output already reflected in later reasoning
-- dead-end investigation traces
+- abandoned investigation traces
 - superseded diagnostics
 
 ## Cost comparison
 
-Do not compare only the compaction call.
-
-For each arm, consider:
+Compare:
 
 ```text
 Jev input cost
-+ compaction model uncached input
++ compaction uncached model input
 + compaction cache read/write cost
 + compaction output
-+ subsequent checkpoint input through the next compaction
-+ repeated tool/reasoning work caused by lost context
++ subsequent continuation input until the next compaction
++ repeated work caused by lost context
 ```
-
-A larger checkpoint can remain cheap while cached, but it still increases future context footprint and may become expensive when the prefix changes.
 
 ## Decision criteria
 
-Continue with `guided-native` as the default if it:
+Keep `guided-native` as the default if it:
 
-- keeps compaction cache reuse close to native OpenCode
-- materially improves the native summary's focus on consequential state
-- does not increase continuation errors or unnecessary re-work
+- preserves cache reuse close to native OpenCode
+- improves summary focus on consequential state
+- does not increase continuation errors
 - adds little Jev latency/cost relative to downstream savings
 
-Prefer native OpenCode and disable Jev if observe/guided-native adds cost without measurable quality improvement.
+Use native OpenCode alone if Jev adds cost without measurable quality improvement.
 
-Prefer `deterministic` only if skipping the frontier summary produces a better total cost/quality result despite its typically larger retained checkpoint.
+## Containment
 
-## Useful status fields
+When testing through `opencode-containment`, mount the plugin checkout read-only at the same absolute host path:
 
-`/jev-status` should show:
+```sh
+export OPENCODE_LOCAL_PLUGIN_DIRS="$HOME/github/opencode-jev-compactor"
+export TYPESAFE_API_KEY='...'
+```
 
-- `Loaded plugin: 0.0.8`
-- `Delivery: observe|guided-native|deterministic`
-- compaction hook invocation count
-- compaction model request count
-- maximum prunable payload
-- fitted Jev state size/stage
-- Jev request/input token/cost metrics
-- per-tool decisions
-- projected/native guidance size
+The same `file:///home/christian/github/opencode-jev-compactor` config can then work outside and inside containment.
 
-For `guided-native`, the compaction model request counter should advance after the hook.
-
-For `deterministic`, a successful plugin checkpoint should prevent that native compaction model request.
+For an already-created Docker Sandbox, recreate it after changing the set of local plugin directories so the read-only workspace mount is present.
