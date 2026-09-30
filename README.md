@@ -1,21 +1,33 @@
 # OpenCode Jev Compaction
 
-TypeSafe Jev guidance for OpenCode v2 compaction.
+TypeSafe Jev guidance for the current stable OpenCode compaction pipeline.
 
-The plugin keeps **code in control** and uses Jev only for narrow semantic judgments about tool evidence. Jev never writes the final summary. The default mode preserves the existing compaction request prefix, appends a small guidance message, and lets OpenCode's native frontier model produce the final structured checkpoint.
+The plugin keeps application code in control and uses Jev only for narrow judgments about historical tool evidence. Jev never writes the final summary. By default, Jev identifies stale or provenance-only tool traces, the plugin appends compact guidance through OpenCode's native compaction hook, and OpenCode's own frontier model writes the continuation summary.
 
-## Status
+## Compatibility
 
-Version `0.0.8` targets **OpenCode 2.0.14** and pins `@opencode/plugin` to exactly `2.0.14`.
+Version `0.1.0` follows **OpenCode latest stable** rather than pinning an OpenCode SDK version.
 
-The default architecture is ready for local validation, but provider prompt-cache behavior and continuation quality still need to be measured on real sessions.
+It uses OpenCode's current public plugin contract:
+
+```ts
+"experimental.session.compacting": async (input, output) => {
+  output.context.push(guidance)
+}
+```
+
+The repository has no runtime dependency on `@opencode/plugin`. This avoids coupling the plugin checkout to a particular OpenCode package release.
+
+The compaction hook is still named `experimental.session.compacting` upstream, so compatibility with a newly released `opencode:latest` should always be covered by smoke testing.
 
 ## Architecture
 
-### Default: guided-native
-
 ```text
-OpenCode session.compaction
+OpenCode native compaction
+        ↓
+experimental.session.compacting
+        ↓
+fetch current session transcript through OpenCode SDK client
         ↓
 normalize transcript
         ↓
@@ -29,147 +41,128 @@ ONE Jev decision stage
         ↓
 deterministic keep / provenance-only / stale policy
         ↓
-append compact guidance after the unchanged transcript
+append small guidance to output.context
         ↓
-OpenCode native summary prompt
-        ↓
-frontier model writes the final checkpoint
+OpenCode native compaction model writes final summary
 ```
 
-The existing historical messages are not rewritten before OpenCode's compaction model request. This preserves the request prefix so providers that support prefix caching can continue matching it.
+Jev is always one decision stage. Independent questions may be split into multiple request-budget batches, but a Jev answer never triggers a second verification request.
 
 ### Delivery modes
 
-| Mode | Jev runs | Changes native compaction input | Frontier summary runs | Purpose |
+| Mode | Jev runs | Changes native transcript | Changes compaction prompt | Native summary runs |
 | --- | --- | --- | --- | --- |
-| `guided-native` | yes | appends guidance only | yes | Default production candidate |
-| `observe` | yes | no | yes | Measure Jev decisions/cost without affecting OpenCode behavior |
-| `deterministic` | yes | replaces final result through `event.result` | no | Compare against the no-frontier-summary design |
-| plugin disabled | no | no | yes | Native OpenCode baseline |
+| `guided-native` | yes | no | appends guidance only | yes |
+| `observe` | yes | no | no | yes |
+| plugin disabled | no | no | no | yes |
 
-Jev is always **one decision stage**. Request-budget batching may split independent questions across API requests, but an answer never triggers a second verification judgment.
+The former `deterministic` mode is not part of the current stable integration. OpenCode latest exposes compaction prompt/context customization through the public plugin hook, but not a supported plugin mechanism to install a replacement summary result and skip the native model request.
 
-## Tool policy
+## Why guided-native
 
-Application code determines what Jev is allowed to de-emphasize.
+The native summary is useful. It can compress conversational prose and completed work much more effectively than preserving all user/assistant text verbatim.
 
-| Policy | Examples | Allowed behavior |
+Jev's role is therefore narrower:
+
+- identify repeatable tool evidence that does not need to survive the checkpoint
+- distinguish raw result detail from important action provenance
+- keep uncertain, failed, incomplete, recent, or unknown tool evidence protected
+- give the native summarizer a small, typed decision signal
+
+OpenCode serializes the existing conversation before applying `output.context`. Appending guidance therefore avoids rewriting the historical conversation prefix immediately before the compaction model call. That is the cache-friendly property we want to validate with real provider usage counters.
+
+## Deterministic tool policy
+
+Application code determines what Jev is allowed to classify as stale.
+
+| Policy | Examples | Allowed recommendation |
 | --- | --- | --- |
-| `pin_full` | `question`, `skill`, `subagent`, unknown tools, incomplete calls, failed results, pinned/recent calls | Full evidence remains protected |
-| `protect_call` | `write`, `edit`, `patch`, `shell`, `execute`, web fetch/search | Action/provenance stays; raw result may be summarized away |
-| `drop_eligible` | `read`, `grep`, `glob`, `find`, `list`, `ls` | Full keep, provenance-only, or stale/omit |
+| `pin_full` | `question`, `skill`, `subagent`, unknown tools, incomplete calls, failed results, pinned/recent calls | no destructive recommendation |
+| `protect_call` | `write`, `edit`, `patch`, `shell`, `execute`, web fetch/search | preserve action/provenance; raw result may be de-emphasized |
+| `drop_eligible` | `read`, `grep`, `glob`, `find`, `list`, `ls` | full keep, provenance-only, or stale/omit |
 
 Unknown tools fail toward full retention.
 
 For `drop_eligible` tools Jev answers two independent Nouls:
 
-1. Is the call/input still necessary for the current objective?
-2. Is the exact full result still necessary?
+1. Is retaining the call/input still necessary for the current objective?
+2. Is retaining the exact full result still necessary?
 
-For `protect_call` tools only the exact-result question is needed because code already decided the call provenance stays.
+For `protect_call` tools only the exact-result question is needed because code has already protected provenance.
 
-The default `keepThreshold` is `0.15`. Equality keeps, so destructive recommendations require a probability below the threshold.
-
-## Cache-friendly guidance
-
-A successful `guided-native` run appends one chronological system message after the existing transcript:
-
-```text
-<existing cached transcript>
-<jev-compaction-guidance>
-  omit stale repeatable calls A/B
-  preserve only consequential provenance for C/D
-</jev-compaction-guidance>
-<OpenCode native summary prompt>
-```
-
-The plugin does not modify `event.system` and does not rewrite earlier `event.messages`.
-
-Guidance contains only sanitized tool IDs/names and coarse actions. Raw tool inputs, outputs, and Jev probabilities are not copied into the guidance.
-
-This is designed to preserve provider prefix-cache reuse. Actual cache behavior is provider-specific and must be measured.
+The default `keepThreshold` is `0.15`. Equality keeps.
 
 ## Cost controls
 
-Before Jev is called, the plugin computes the maximum semantic payload the active tool policy could possibly remove or de-emphasize.
+Before calling Jev, the plugin computes the maximum semantic payload the active policy could possibly de-emphasize.
 
-If even the best possible outcome cannot satisfy `minReductionRatio`, the plugin falls through to native OpenCode compaction with:
+If even the best possible outcome cannot satisfy `minReductionRatio`, the plugin returns without calling Jev and native OpenCode compaction proceeds unchanged.
 
-```text
-insufficient-prunable-payload
-```
+Protected-call results already at or below `truncateHeadChars` are also excluded from Jev questions because reducing them would have no meaningful effect.
 
-and spends zero Jev tokens.
+## Safety and compatibility behavior
 
-Protected-call results already at or below `truncateHeadChars` are also omitted from Jev questions because reducing them would have no meaningful effect.
+The plugin:
 
-## State and safety
+- reads the current session through OpenCode's SDK client only when compaction runs
+- normalizes current `{ info, parts }` message shapes
+- handles current `ToolPart.callID`, `ToolPart.tool`, and tool-state output shapes
+- ignores user text OpenCode marks ignored
+- excludes dropped errored assistant turns
+- preserves meaningful aborted turns
+- recognizes interrupted tool output
+- does not treat already-compacted tool output as live bulky evidence
+- ignores inlined plain-text and directory pseudo-file attachments
+- sanitizes host-controlled IDs/names before Jev state, Jev questions, or guidance
+- redacts common secret shapes before sending the fitted state to TypeSafe
+- defaults unknown/incomplete/failed tools toward retention
+- fails open when session retrieval, Jev, parsing, or state fitting fails
+- requires HTTPS for TypeSafe except loopback HTTP used for local testing
+- rejects TypeSafe URL credentials, fragments, and HTTP redirects
 
-Jev receives an ordered state containing:
-
-- resolved current objective
-- previous structured checkpoint baseline, when present
-- user/assistant conversation text
-- tool inputs
-- result status and size
-- a small exact result preview
-
-The local transcript is not modified while the Jev state is fitted.
-
-Additional safeguards include:
-
-- best-effort secret redaction before TypeSafe requests
-- host-controlled tool IDs/names sanitized before entering Jev instructions/state
-- unknown tools retained by default
-- incomplete and failed tool calls retained by default
-- interrupted tool output handled explicitly
-- results already cleared by OpenCode are not treated as live bulky output
-- ignored user text and dropped errored assistant turns are excluded when those host shapes are encountered
-- inlined plain-text pseudo-files and directory pseudo-files are excluded from attachment accounting
-- malformed/missing Jev answers fail open to native OpenCode compaction
-- TypeSafe API URLs must use HTTPS, except loopback HTTP for local testing
-- redirects are rejected on TypeSafe requests so the bearer token cannot be silently redirected
-
-## Previous checkpoints and weak follow-ups
-
-Previous `<conversation-checkpoint>` content is parsed into structured baseline sections. Material before that checkpoint is not re-scored or copied back as a raw envelope.
-
-Weak follow-ups such as `more`, `continue`, and `more more` are not treated as standalone objectives. Resolution order is:
-
-1. newest substantive user request
-2. previous checkpoint objective
-3. newest earlier substantive user request
-4. otherwise native fallback via `weak-objective-unresolved`
+A failure never blocks native OpenCode compaction.
 
 ## Install from a checkout
 
-No npm publication step is required for local testing.
+For normal runtime use, the plugin does not need to be globally installed or published to npm.
+
+Clone/update it:
 
 ```sh
-cd /home/christian/github/opencode-jev-compactor
+cd ~/github/opencode-jev-compactor
 git switch main
-git pull
+git pull --ff-only
+```
+
+For development validation:
+
+```sh
 corepack pnpm install
 corepack pnpm run typecheck
 corepack pnpm test
 ```
 
-Then configure OpenCode to load the checkout directly.
+OpenCode can load the repository directly through a `file://` plugin spec.
 
-### Global vs project scope
+## Configuration
 
-For OpenCode 2.0.14:
+### Global
 
-- **Global config:** `~/.config/opencode/opencode.jsonc` or `~/.config/opencode/opencode.json`
-- **Project config:** `./opencode.jsonc`, `./opencode.json`, or `.opencode/opencode.json`
+Linux/macOS:
 
-Use **global config** when testing the plugin across normal OpenCode sessions and repositories.
+```text
+~/.config/opencode/opencode.jsonc
+```
 
-Use **project config** when you want Jev compaction enabled only for one repository.
+or `opencode.json`.
 
-Do not also copy the same plugin into `~/.config/opencode/plugins/` or `.opencode/plugins/` when loading it by package path. OpenCode loads plugins from all configured sources, so duplicate local copies can register duplicate hooks.
+### Project
 
-### Recommended global test config
+Use `opencode.jsonc` or `opencode.json` in the project root when the plugin should apply only to that project.
+
+### Recommended first test
+
+Start in `observe`:
 
 ```jsonc
 {
@@ -181,18 +174,16 @@ Do not also copy the same plugin into `~/.config/opencode/plugins/` or `.opencod
     "buffer": 30000
   },
 
-  "plugins": [
-    {
-      "package": "/home/christian/github/opencode-jev-compactor",
-      "options": {
+  "plugin": [
+    [
+      "file:///home/christian/github/opencode-jev-compactor",
+      {
         "enabled": true,
         "delivery": "observe",
         "model": "jev-latest",
-
         "keepThreshold": 0.15,
         "preserveRecentMessages": 6,
         "minReductionRatio": 0.15,
-
         "toolResultPreviewChars": 300,
         "truncateHeadChars": 600,
         "maxStateChars": 100000,
@@ -200,83 +191,83 @@ Do not also copy the same plugin into `~/.config/opencode/plugins/` or `.opencod
         "maxRequestTokens": 30000,
         "maxConcurrentRequests": 2,
         "timeoutMs": 6000,
-
-        "enableCompareTool": true,
         "historyLimit": 10
       }
-    }
+    ]
   ]
 }
 ```
 
-For the first local run, `observe` is recommended because it collects Jev decisions without changing native OpenCode compaction. After validating the decisions, switch to `guided-native`.
-
-The OpenCode server process must have:
+The OpenCode process also needs:
 
 ```sh
-export TYPESAFE_API_KEY='your-key-here'
+export TYPESAFE_API_KEY='...'
 ```
 
-Restart the OpenCode server/service after changing the checkout or plugin configuration.
+After validating the decisions in logs, switch to:
+
+```jsonc
+"delivery": "guided-native"
+```
+
+## Containment
+
+`opencode-containment` supports mounting local plugin checkouts read-only at the same absolute path inside the runtime.
+
+Recommended host settings:
+
+```sh
+export OPENCODE_LOCAL_PLUGIN_DIRS="$HOME/github/opencode-jev-compactor"
+export TYPESAFE_API_KEY='...'
+```
+
+Then the same global plugin spec can work both on the host and inside containment:
+
+```jsonc
+"plugin": [
+  [
+    "file:///home/christian/github/opencode-jev-compactor",
+    { "enabled": true, "delivery": "observe" }
+  ]
+]
+```
+
+See the containment repository documentation for container and sandbox details.
 
 ## Options
 
 | Option | Default | Purpose |
 | --- | ---: | --- |
-| `enabled` | `true` | Configured default for Jev interception |
-| `delivery` | `guided-native` | `guided-native`, `observe`, or `deterministic` |
-| `model` | `jev-latest` | TypeSafe System One model alias |
-| `keepThreshold` | `0.15` | Retention probability threshold; equality keeps |
-| `preserveRecentMessages` | `6` | Pins the newest N messages; first message and newest user request are also pinned |
+| `enabled` | `true` | Enable Jev decisions |
+| `delivery` | `guided-native` | `guided-native` or `observe` |
+| `model` | `jev-latest` | TypeSafe System One model |
+| `keepThreshold` | `0.15` | Retention threshold; equality keeps |
+| `preserveRecentMessages` | `6` | Pin the newest N messages |
 | `minReductionRatio` | `0.15` | Minimum semantic payload fraction worth targeting |
 | `toolResultPreviewChars` | `300` | Exact result prefix included in Jev state |
-| `truncateHeadChars` | `600` | Retained prefix in deterministic mode and protected-result usefulness threshold |
+| `truncateHeadChars` | `600` | Result-detail usefulness threshold |
 | `maxStateChars` | `100000` | Jev-state character ceiling |
 | `maxStateTokens` | `24000` | Jev-state estimated-token ceiling |
-| `maxRequestTokens` | `30000` | State + question request budget |
+| `maxRequestTokens` | `30000` | State + question budget |
 | `maxConcurrentRequests` | `2` | Concurrent independent Jev batches |
 | `timeoutMs` | `6000` | Total Jev decision window |
-| `enableCompareTool` | `true` | Registers the optional `jev_compare` tool |
-| `historyLimit` | `10` | Stored run records |
-| `jevInputCostPerMillionUsd` | `0.042` | Display-only Jev input cost estimate |
-| `baseUrl` | TypeSafe System One API | HTTPS endpoint; loopback HTTP allowed for local testing |
+| `historyLimit` | `10` | Bounded in-memory diagnostic history |
+| `jevInputCostPerMillionUsd` | `0.042` | Display-only Jev input-cost estimate |
+| `baseUrl` | TypeSafe System One | HTTPS endpoint; loopback HTTP allowed |
 
-The old `verificationThreshold`, `verificationResultPreviewChars`, and `uncertaintyMargin` options are obsolete and ignored.
+## Diagnostics
 
-## TUI diagnostics
+OpenCode latest no longer uses the old experimental v2 server-plugin RPC/TUI surface that powered `/jev-status`.
+
+Current diagnostics are emitted through `client.app.log()` under:
 
 ```text
-/jev-status
-/jev-toggle
-/jev-reset
+opencode.jev-compaction
 ```
 
-`/jev-status` reports:
+Each useful run includes a formatted decision summary with Jev state size, input tokens/cost, maximum prunable payload, and bounded per-tool decisions. No raw tool payload is written to the guidance.
 
-- plugin version and delivery mode
-- process/instance and OpenCode Location
-- compaction hook/request counters
-- fitted Jev state size/stage
-- maximum prunable payload
-- Jev request count/input tokens/latency/cost
-- per-tool keep/provenance/drop decisions
-- projected/native guidance size
-- projected deterministic checkpoint size
-
-Historical 0.0.5 verification probabilities remain readable, but current runs never issue a verification pass.
-
-## Local validation
-
-See [docs/TESTING.md](docs/TESTING.md) for the full benchmark procedure.
-
-The intended comparison is:
-
-1. native OpenCode
-2. Jev `observe`
-3. Jev `guided-native`
-4. Jev `deterministic`
-
-The useful metric is **total cost and continuation quality until the next compaction**, not just bytes removed at the current boundary.
+See [docs/TESTING.md](docs/TESTING.md) for the local comparison procedure.
 
 ## Development
 
@@ -286,7 +277,7 @@ corepack pnpm run typecheck
 corepack pnpm test
 ```
 
-CI runs the same install, typecheck, and test path with the lockfile frozen.
+CI uses the frozen lockfile.
 
 ## References
 
@@ -295,5 +286,4 @@ CI runs the same install, typecheck, and test path with the lockfile frozen.
 - https://docs.typesafe.ai/concepts/state
 - https://docs.typesafe.ai/primitives/noul
 - https://docs.typesafe.ai/api
-- https://opencode.ai/v2/docs/compaction/
-- https://opencode.ai/v2/docs/build/plugins/
+- https://opencode.ai/docs/plugins/
