@@ -15,7 +15,7 @@ import { assembleCheckpoint } from "../.test-dist/src/transcript/checkpoint.js"
 import { parseJevResponse, JevMalformedResponseError } from "../.test-dist/src/jev/parse.js"
 import { JevClient } from "../.test-dist/src/jev/client.js"
 import { compactTranscript } from "../.test-dist/src/compaction/engine.js"
-import { buildNativeCompactionGuidance, nativeGuidanceMessage } from "../.test-dist/src/compaction/guidance.js"
+import { buildNativeCompactionGuidance } from "../.test-dist/src/compaction/guidance.js"
 import { DEFAULT_OPTIONS, parseOptions } from "../.test-dist/src/plugin/options.js"
 import { appendHistory, formatHistory, formatRun, makeRunRecord } from "../.test-dist/src/observability/history.js"
 import { toJson } from "../.test-dist/src/observability/json.js"
@@ -51,13 +51,13 @@ const composeOptions = {
   keepThreshold: DEFAULT_OPTIONS.keepThreshold,
 }
 
-test("0.0.8 options default to cache-friendly guided-native delivery", () => {
+test("0.1.0 options default to cache-friendly guided-native delivery", () => {
   assert.equal(DEFAULT_OPTIONS.delivery, "guided-native")
   assert.equal(DEFAULT_OPTIONS.keepThreshold, 0.15)
   assert.equal(DEFAULT_OPTIONS.maxConcurrentRequests, 2)
   const parsed = parseOptions({
     enabled: false,
-    delivery: "deterministic",
+    delivery: "guided-native",
     keepThreshold: 0.2,
     toolResultPreviewChars: 250,
     maxStateTokens: 23000,
@@ -65,17 +65,18 @@ test("0.0.8 options default to cache-friendly guided-native delivery", () => {
     maxConcurrentRequests: 1,
   })
   assert.equal(parsed.enabled, false)
-  assert.equal(parsed.delivery, "deterministic")
+  assert.equal(parsed.delivery, "guided-native")
   assert.equal(parsed.keepThreshold, 0.2)
   assert.equal(parsed.toolResultPreviewChars, 250)
   assert.equal(parsed.maxConcurrentRequests, 1)
   assert.equal(parsed.maxRequestTokens, 30000)
   assert.equal(parseOptions({ maxRequestTokens: 60000 }).maxRequestTokens, DEFAULT_OPTIONS.maxRequestTokens)
   assert.equal(parseOptions({ delivery: "observe" }).delivery, "observe")
+  assert.equal(parseOptions({ delivery: "deterministic" }).delivery, "guided-native")
   assert.equal(parseOptions({ delivery: "invalid" }).delivery, "guided-native")
 })
 
-test("native guidance contains only bounded tool identifiers and keeps existing prefix append-only", () => {
+test("native guidance contains only bounded tool identifiers and no raw evidence", () => {
   const stats = {
     toolDecisionDiagnostics: [
       { toolCallId: "read-1", toolName: "read", action: "drop", reason: "jev", keepCall: 0.02, keepResult: 0.01 },
@@ -92,13 +93,7 @@ test("native guidance contains only bounded tool identifiers and keeps existing 
   assert.match(guidance.text, /call_id=shell-1 tool=shell/)
   assert.doesNotMatch(guidance.text, /keep-1/)
   assert.doesNotMatch(guidance.text, /0\.0[1239]/)
-
-  const original = [{ role: "user", content: [{ type: "text", text: "cached prefix" }] }]
-  const appended = [...original, nativeGuidanceMessage(guidance.text)]
-  assert.strictEqual(appended[0], original[0])
-  assert.deepEqual(appended.slice(0, -1), original)
-  assert.equal(appended.at(-1).role, "system")
-  assert.match(appended.at(-1).content[0].text, /operator-authored guidance/)
+  assert.doesNotMatch(guidance.text, /tool input|tool output|raw result:/i)
 })
 
 test("native guidance sanitizes control characters from tool labels", () => {
@@ -120,62 +115,7 @@ test("storage JSON normalization removes undefined and rejects non-finite values
   assert.throws(() => toJson({ latency: Number.POSITIVE_INFINITY }), /non-finite/)
 })
 
-test("status reports instance identity and only compaction hook/request observations", async () => {
-  const hooks = new Map()
-  let handlers
-  const storage = new Map()
-  const dispose = { async dispose() {} }
-  const cleanup = await plugin.setup({
-    options: { enableCompareTool: false },
-    location: { directory: "/test/location" },
-    storage: {
-      async get(key) { return storage.get(key) },
-      async set(key, value) { storage.set(key, value) },
-    },
-    rpc: { async register(_definition, value) { handlers = value; return dispose } },
-    session: { async hook(name, callback) { hooks.set(name, callback); return dispose } },
-  })
-  try {
-    const initial = await handlers.status()
-    assert.equal(initial.delivery, "guided-native")
-    assert.equal(initial.processPid, process.pid)
-    assert.match(initial.instanceId, /^[0-9a-f-]{36}$/)
-    assert.ok(!Number.isNaN(Date.parse(initial.setupAt)))
-    assert.equal(initial.locationDirectory, "/test/location")
-    assert.equal(initial.locationWorkspaceID, null)
-    assert.equal(initial.modelRequestCount, 0)
-    assert.equal(initial.lastModelRequestSessionID, null)
-    assert.equal(initial.lastModelRequestAt, null)
-    assert.equal(initial.hookInvocations, 0)
-    assert.equal(initial.lastHookSessionID, null)
-    assert.equal(initial.lastHookInvocationAt, null)
-
-    const primary = { kind: "primary", sessionID: "ses_primary" }
-    const request = { kind: "compaction", sessionID: "ses_request" }
-    await hooks.get("model.request")(primary)
-    await hooks.get("model.request")(request)
-    assert.deepEqual(primary, { kind: "primary", sessionID: "ses_primary" })
-    assert.deepEqual(request, { kind: "compaction", sessionID: "ses_request" })
-    const observed = await handlers.status()
-    assert.equal(observed.instanceId, initial.instanceId)
-    assert.equal(observed.modelRequestCount, 1)
-    assert.equal(observed.lastModelRequestSessionID, "ses_request")
-    assert.ok(!Number.isNaN(Date.parse(observed.lastModelRequestAt)))
-    assert.equal(observed.hookInvocations, 0)
-
-    await hooks.get("compaction")({ sessionID: "ses_compact", messages: [], result: { summary: "already set" } })
-    const after = await handlers.status()
-    assert.equal(after.hookInvocations, 1)
-    assert.equal(after.lastHookSessionID, "ses_compact")
-    assert.ok(!Number.isNaN(Date.parse(after.lastHookInvocationAt)))
-    assert.equal(after.modelRequestCount, 1)
-    assert.doesNotMatch(JSON.stringify(after), /already set/)
-  } finally {
-    await cleanup?.()
-  }
-})
-
-async function withFakeJevPlugin(delivery, run) {
+async function withFakeLatestPlugin(delivery, raw, run, options = {}) {
   const previousKey = process.env.TYPESAFE_API_KEY
   const previousFetch = globalThis.fetch
   process.env.TYPESAFE_API_KEY = "test-key"
@@ -190,97 +130,109 @@ async function withFakeJevPlugin(delivery, run) {
     }), { status: 200, headers: { "content-type": "application/json" } })
   }
 
-  const hooks = new Map()
-  const storage = new Map()
-  const dispose = { async dispose() {} }
-  let handlers
-  const cleanup = await plugin.setup({
-    options: {
-      delivery,
-      enableCompareTool: false,
-      preserveRecentMessages: 2,
-      timeoutMs: 1000,
+  const logs = []
+  const calls = []
+  const hooks = await plugin({
+    directory: "/test/location",
+    client: {
+      session: {
+        async messages(input) {
+          calls.push(input)
+          return { data: raw }
+        },
+      },
+      app: {
+        async log(entry) {
+          logs.push(entry)
+        },
+      },
     },
-    location: { directory: "/test/location" },
-    storage: {
-      async get(key) { return storage.get(key) },
-      async set(key, value) { storage.set(key, value) },
-    },
-    rpc: { async register(_definition, value) { handlers = value; return dispose } },
-    session: { async hook(name, callback) { hooks.set(name, callback); return dispose } },
+  }, {
+    delivery,
+    preserveRecentMessages: 2,
+    timeoutMs: 1000,
+    ...options,
   })
 
   try {
-    await run({ hooks, handlers })
+    await run({ hooks, logs, calls })
   } finally {
-    await cleanup?.()
     globalThis.fetch = previousFetch
     if (previousKey === undefined) delete process.env.TYPESAFE_API_KEY
     else process.env.TYPESAFE_API_KEY = previousKey
   }
 }
 
-test("guided-native appends guidance without rewriting the existing compaction prefix", async () => {
+test("guided-native appends Jev guidance through OpenCode latest compaction context", async () => {
   const raw = await fixture("tool-heavy-session.json")
-  await withFakeJevPlugin("guided-native", async ({ hooks, handlers }) => {
-    const original = [...raw]
-    const event = { sessionID: "ses_guided", messages: [...raw] }
-    await hooks.get("compaction")(event)
+  await withFakeLatestPlugin("guided-native", raw, async ({ hooks, logs, calls }) => {
+    const output = { context: [] }
+    await hooks["experimental.session.compacting"]({ sessionID: "ses_guided" }, output)
 
-    assert.equal(event.result, undefined)
-    assert.equal(event.messages.length, original.length + 1)
-    for (let index = 0; index < original.length; index += 1) {
-      assert.strictEqual(event.messages[index], original[index])
-    }
-    const guidance = event.messages.at(-1)
-    assert.equal(guidance.role, "system")
-    assert.match(guidance.content[0].text, /<jev-compaction-guidance>/)
-    assert.doesNotMatch(guidance.content[0].text, /OLD CLIENT/)
-
-    const status = await handlers.status()
-    assert.equal(status.delivery, "guided-native")
-    assert.match(status.lastRun, /ok \(native-guidance\)/)
-    assert.match(status.lastRun, /native guidance [1-9][0-9,]* chars/)
+    assert.equal(output.prompt, undefined)
+    assert.equal(output.context.length, 1)
+    assert.match(output.context[0], /<jev-compaction-guidance>/)
+    assert.doesNotMatch(output.context[0], /OLD CLIENT/)
+    assert.equal(calls.length, 1)
+    assert.deepEqual(calls[0], {
+      path: { id: "ses_guided" },
+      query: { directory: "/test/location" },
+    })
+    assert.ok(logs.some((entry) => entry.body?.extra?.reason === "native-guidance"))
   })
 })
 
-test("deterministic delivery still installs event.result and does not append guidance", async () => {
+test("observe runs Jev but leaves OpenCode native compaction prompt unchanged", async () => {
   const raw = await fixture("tool-heavy-session.json")
-  await withFakeJevPlugin("deterministic", async ({ hooks, handlers }) => {
-    const event = { sessionID: "ses_deterministic", messages: [...raw] }
-    await hooks.get("compaction")(event)
+  await withFakeLatestPlugin("observe", raw, async ({ hooks, logs }) => {
+    const output = { context: [] }
+    await hooks["experimental.session.compacting"]({ sessionID: "ses_observe" }, output)
 
-    assert.equal(event.messages.length, raw.length)
-    assert.ok(event.result)
-    assert.equal(typeof event.result.summary, "string")
-    assert.equal(event.result.metadata.delivery, "deterministic")
-    assert.doesNotMatch(event.result.summary, /<jev-compaction-guidance>/)
-
-    const status = await handlers.status()
-    assert.equal(status.delivery, "deterministic")
-    assert.match(status.lastRun, /delivery deterministic/)
+    assert.deepEqual(output, { context: [] })
+    assert.ok(logs.some((entry) => entry.body?.extra?.reason === "observe-only"))
   })
 })
 
-test("observe delivery records Jev decisions without changing native compaction input", async () => {
-  const raw = await fixture("tool-heavy-session.json")
-  await withFakeJevPlugin("observe", async ({ hooks, handlers }) => {
-    const event = { sessionID: "ses_observe", messages: [...raw] }
-    const originalArray = event.messages
-    const originalItems = [...event.messages]
-    await hooks.get("compaction")(event)
+test("missing TypeSafe key fails open without changing native compaction", async () => {
+  const previousKey = process.env.TYPESAFE_API_KEY
+  delete process.env.TYPESAFE_API_KEY
+  const logs = []
+  let messageCalls = 0
+  try {
+    const hooks = await plugin({
+      directory: "/test/location",
+      client: {
+        session: {
+          async messages() {
+            messageCalls += 1
+            return { data: [] }
+          },
+        },
+        app: {
+          async log(entry) {
+            logs.push(entry)
+          },
+        },
+      },
+    }, { delivery: "guided-native" })
 
-    assert.equal(event.result, undefined)
-    assert.strictEqual(event.messages, originalArray)
-    assert.equal(event.messages.length, originalItems.length)
-    for (let index = 0; index < originalItems.length; index += 1) {
-      assert.strictEqual(event.messages[index], originalItems[index])
-    }
+    const output = { context: [] }
+    await hooks["experimental.session.compacting"]({ sessionID: "ses_no_key" }, output)
+    assert.deepEqual(output, { context: [] })
+    assert.equal(messageCalls, 0)
+    assert.ok(logs.some((entry) => entry.body?.extra?.reason === "missing-typesafe-api-key"))
+  } finally {
+    if (previousKey === undefined) delete process.env.TYPESAFE_API_KEY
+    else process.env.TYPESAFE_API_KEY = previousKey
+  }
+})
 
-    const status = await handlers.status()
-    assert.equal(status.delivery, "observe")
-    assert.match(status.lastRun, /ok \(observe-only\)/)
-    assert.match(status.lastRun, /native guidance [1-9][0-9,]* chars/)
+test("unexpected session message payload fails open", async () => {
+  await withFakeLatestPlugin("guided-native", { unexpected: true }, async ({ hooks, logs }) => {
+    const output = { context: [] }
+    await hooks["experimental.session.compacting"]({ sessionID: "ses_bad_messages" }, output)
+    assert.deepEqual(output, { context: [] })
+    assert.ok(logs.some((entry) => entry.body?.extra?.reason === "session-messages-unavailable"))
   })
 })
 
