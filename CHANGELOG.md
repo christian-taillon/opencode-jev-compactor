@@ -12,6 +12,7 @@ OpenCode latest integration.
 - Retain `observe` mode for decision/cost validation without changing native compaction.
 - Removed unsupported direct-result checkpoint replacement and preview-only RPC/TUI hooks.
 - Removed the runtime dependency on a pinned `@opencode/plugin` version.
+- Added a `dist/` build and load OpenCode from compiled JavaScript rather than relying on runtime TypeScript resolution.
 - Persist bounded run history under XDG state and emit structured diagnostics.
 - Updated configuration, containment integration, and testing documentation for `opencode:latest`.
 
