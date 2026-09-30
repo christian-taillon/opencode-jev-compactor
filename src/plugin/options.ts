@@ -17,7 +17,6 @@ export interface PluginOptions {
   maxRequestTokens: number
   maxConcurrentRequests: number
   timeoutMs: number
-  enableCompareTool: boolean
   historyLimit: number
   jevInputCostPerMillionUsd: number
   baseUrl: string
@@ -37,7 +36,6 @@ export const DEFAULT_OPTIONS: PluginOptions = {
   maxRequestTokens: 30_000,
   maxConcurrentRequests: 2,
   timeoutMs: 6_000,
-  enableCompareTool: true,
   historyLimit: 10,
   jevInputCostPerMillionUsd: 0.042,
   baseUrl: "https://api.typesafe.ai/v1/systemone",
@@ -65,9 +63,7 @@ function stringOption(value: unknown, fallback: string): string {
 }
 
 function deliveryOption(value: unknown): CompactionDelivery {
-  return value === "guided-native" || value === "deterministic" || value === "observe"
-    ? value
-    : DEFAULT_OPTIONS.delivery
+  return value === "guided-native" || value === "observe" ? value : DEFAULT_OPTIONS.delivery
 }
 
 export function parseOptions(input: Record<string, unknown>): PluginOptions {
@@ -120,7 +116,6 @@ export function parseOptions(input: Record<string, unknown>): PluginOptions {
       true,
     ),
     timeoutMs: numberOption(input.timeoutMs, DEFAULT_OPTIONS.timeoutMs, 250, 30_000, true),
-    enableCompareTool: boolOption(input.enableCompareTool, DEFAULT_OPTIONS.enableCompareTool),
     historyLimit: numberOption(input.historyLimit, DEFAULT_OPTIONS.historyLimit, 1, 100, true),
     jevInputCostPerMillionUsd: numberOption(
       input.jevInputCostPerMillionUsd,
