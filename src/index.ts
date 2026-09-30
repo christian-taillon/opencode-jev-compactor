@@ -45,6 +45,50 @@ async function readSessionMessages(ctx: StableOpenCodeContext, sessionID: string
   return response.data
 }
 
+function messageInfo(value: unknown): Record<string, unknown> | undefined {
+  if (!isRecord(value)) return
+  return isRecord(value.info) ? value.info : value
+}
+
+function messageParts(value: unknown): unknown[] {
+  if (!isRecord(value)) return []
+  if (Array.isArray(value.parts)) return value.parts
+  if (Array.isArray(value.content)) return value.content
+  return []
+}
+
+function hasCompactionPart(value: unknown): boolean {
+  return messageParts(value).some((part) => isRecord(part) && part.type === "compaction")
+}
+
+/**
+ * OpenCode keeps completed compaction markers/summaries in session history.
+ * Jev should not repeatedly re-score tool traces already absorbed by a prior
+ * native continuation summary. Start at the latest completed summary and
+ * analyze only that baseline plus newer chronological material.
+ */
+export function currentCompactionWindow(messages: readonly unknown[]): unknown[] {
+  const compactionUsers = new Set<string>()
+  for (const message of messages) {
+    const info = messageInfo(message)
+    if (!info || info.role !== "user" || !hasCompactionPart(message)) continue
+    if (typeof info.id === "string") compactionUsers.add(info.id)
+  }
+
+  let latestSummaryIndex = -1
+  for (let index = 0; index < messages.length; index += 1) {
+    const info = messageInfo(messages[index])
+    if (!info || info.role !== "assistant" || info.summary !== true) continue
+    if (info.error !== undefined && info.error !== null) continue
+    if (!info.finish) continue
+    if (typeof info.parentID !== "string" || !compactionUsers.has(info.parentID)) continue
+    latestSummaryIndex = index
+  }
+
+  if (latestSummaryIndex < 0) return [...messages]
+  return messages.slice(latestSummaryIndex)
+}
+
 function logRun(record: CompactionRunRecord): void {
   log({
     event: "compaction.run",
@@ -132,7 +176,8 @@ export const JevCompactionPlugin = async (
 
       try {
         const messages = await readSessionMessages(ctx, input.sessionID)
-        const outcome = await compactTranscript(messages, client, options, undefined, input.sessionID)
+        const analysisMessages = currentCompactionWindow(messages)
+        const outcome = await compactTranscript(analysisMessages, client, options, undefined, input.sessionID)
         const stats = outcome.status === "ok" ? outcome.checkpoint.stats : outcome.stats
         let reason: string | null = outcome.status === "ok" ? null : outcome.reason
 
