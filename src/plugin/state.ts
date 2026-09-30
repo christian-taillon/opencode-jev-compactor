@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto"
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises"
 import { dirname, join } from "node:path"
 import type { CompactionRunRecord } from "../domain/types.js"
@@ -41,7 +42,7 @@ export async function saveRuntimeState(value: PersistedState): Promise<void> {
   const path = statePath()
   const directory = dirname(path)
   await mkdir(directory, { recursive: true, mode: 0o700 })
-  const temporary = `${path}.tmp-${process.pid}`
+  const temporary = `${path}.tmp-${process.pid}-${randomUUID()}`
   await writeFile(temporary, JSON.stringify(toJson(value), null, 2), { encoding: "utf8", mode: 0o600 })
   await rename(temporary, path)
 }
