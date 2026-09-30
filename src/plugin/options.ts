@@ -65,7 +65,7 @@ function stringOption(value: unknown, fallback: string): string {
 }
 
 function deliveryOption(value: unknown): CompactionDelivery {
-  return value === "guided-native" || value === "deterministic" || value === "observe"
+  return value === "guided-native" || value === "observe"
     ? value
     : DEFAULT_OPTIONS.delivery
 }
