@@ -19,7 +19,7 @@ import { buildNativeCompactionGuidance } from "../.test-dist/src/compaction/guid
 import { DEFAULT_OPTIONS, parseOptions } from "../.test-dist/src/plugin/options.js"
 import { appendHistory, formatHistory, formatRun, makeRunRecord } from "../.test-dist/src/observability/history.js"
 import { toJson } from "../.test-dist/src/observability/json.js"
-import plugin from "../.test-dist/src/index.js"
+import plugin, { currentCompactionWindow } from "../.test-dist/src/index.js"
 
 async function fixture(name) {
   return JSON.parse(await readFile(new URL(`./fixtures/${name}`, import.meta.url), "utf8"))
@@ -111,6 +111,34 @@ test("storage JSON normalization removes undefined and rejects non-finite values
     nested: [{ value: 1 }],
   })
   assert.throws(() => toJson({ latency: Number.POSITIVE_INFINITY }), /non-finite/)
+})
+
+test("current compaction window starts at the latest completed native summary", () => {
+  const raw = [
+    { info: { id: "u0", role: "user" }, parts: [{ type: "text", text: "old request" }] },
+    { info: { id: "a0", role: "assistant" }, parts: [{ type: "tool", id: "old-read", name: "read", state: { status: "completed", input: {}, output: "old" } }] },
+    { info: { id: "cu1", role: "user" }, parts: [{ type: "compaction" }] },
+    { info: { id: "cs1", role: "assistant", parentID: "cu1", summary: true, finish: "stop" }, parts: [{ type: "text", text: "native summary baseline" }] },
+    { info: { id: "u1", role: "user" }, parts: [{ type: "text", text: "new request" }] },
+    { info: { id: "a1", role: "assistant" }, parts: [{ type: "tool", id: "new-read", name: "read", state: { status: "completed", input: {}, output: "new" } }] },
+  ]
+  const window = currentCompactionWindow(raw)
+  assert.equal(window.length, 3)
+  assert.strictEqual(window[0], raw[3])
+  assert.strictEqual(window[2], raw[5])
+})
+
+test("current compaction window ignores incomplete or failed compaction summaries", () => {
+  const raw = [
+    { info: { id: "cu1", role: "user" }, parts: [{ type: "compaction" }] },
+    { info: { id: "cs1", role: "assistant", parentID: "cu1", summary: true }, parts: [{ type: "text", text: "unfinished" }] },
+    { info: { id: "cu2", role: "user" }, parts: [{ type: "compaction" }] },
+    { info: { id: "cs2", role: "assistant", parentID: "cu2", summary: true, finish: "error", error: { name: "APIError" } }, parts: [{ type: "text", text: "failed" }] },
+    { info: { id: "u2", role: "user" }, parts: [{ type: "text", text: "current" }] },
+  ]
+  const window = currentCompactionWindow(raw)
+  assert.equal(window.length, raw.length)
+  assert.strictEqual(window[0], raw[0])
 })
 
 async function withFakeLatestPlugin(delivery, run) {
