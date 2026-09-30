@@ -73,18 +73,3 @@ export function buildNativeCompactionGuidance(stats: CompactionStats): NativeCom
   }
 }
 
-/**
- * A chronological system message is intentionally appended to event.messages,
- * not event.system. Appending keeps the pre-existing provider request prefix
- * byte-for-byte stable up to the new guidance message.
- */
-export function nativeGuidanceMessage(text: string) {
-  return {
-    role: "system" as const,
-    content: [{ type: "text" as const, text }],
-    metadata: {
-      source: "opencode.jev-compaction",
-      kind: "native-compaction-guidance",
-    },
-  }
-}
