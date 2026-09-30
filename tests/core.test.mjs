@@ -15,7 +15,7 @@ import { assembleCheckpoint } from "../.test-dist/src/transcript/checkpoint.js"
 import { parseJevResponse, JevMalformedResponseError } from "../.test-dist/src/jev/parse.js"
 import { JevClient } from "../.test-dist/src/jev/client.js"
 import { compactTranscript } from "../.test-dist/src/compaction/engine.js"
-import { buildNativeCompactionGuidance, nativeGuidanceMessage } from "../.test-dist/src/compaction/guidance.js"
+import { buildNativeCompactionGuidance } from "../.test-dist/src/compaction/guidance.js"
 import { DEFAULT_OPTIONS, parseOptions } from "../.test-dist/src/plugin/options.js"
 import { appendHistory, formatHistory, formatRun, makeRunRecord } from "../.test-dist/src/observability/history.js"
 import { toJson } from "../.test-dist/src/observability/json.js"
@@ -75,7 +75,7 @@ test("0.1.0 options default to guided-native on OpenCode latest", () => {
   assert.equal(parseOptions({ delivery: "invalid" }).delivery, "guided-native")
 })
 
-test("native guidance contains only bounded tool identifiers and keeps existing prefix append-only", () => {
+test("native guidance contains only bounded tool identifiers and no raw decision probabilities", () => {
   const stats = {
     toolDecisionDiagnostics: [
       { toolCallId: "read-1", toolName: "read", action: "drop", reason: "jev", keepCall: 0.02, keepResult: 0.01 },
@@ -92,13 +92,6 @@ test("native guidance contains only bounded tool identifiers and keeps existing 
   assert.match(guidance.text, /call_id=shell-1 tool=shell/)
   assert.doesNotMatch(guidance.text, /keep-1/)
   assert.doesNotMatch(guidance.text, /0\.0[1239]/)
-
-  const original = [{ role: "user", content: [{ type: "text", text: "cached prefix" }] }]
-  const appended = [...original, nativeGuidanceMessage(guidance.text)]
-  assert.strictEqual(appended[0], original[0])
-  assert.deepEqual(appended.slice(0, -1), original)
-  assert.equal(appended.at(-1).role, "system")
-  assert.match(appended.at(-1).content[0].text, /operator-authored guidance/)
 })
 
 test("native guidance sanitizes control characters from tool labels", () => {
@@ -223,7 +216,7 @@ test("pinning keeps first, newest user, and recent messages", async () => {
   assert.equal(transcript.messages.find((m) => m.id === "m2").pinned, false)
 })
 
-test("normalizer accepts exact OpenCode 2.0.7 Message tool and media parts", () => {
+test("normalizer accepts legacy OpenCode message tool and media parts", () => {
   const raw = [
     { id: "u1", role: "user", content: [
       { type: "text", text: "Fix /tmp/project/build.ts" },
