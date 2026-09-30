@@ -57,7 +57,7 @@ test("0.1.0 options default to guided-native on OpenCode latest", () => {
   assert.equal(DEFAULT_OPTIONS.maxConcurrentRequests, 2)
   const parsed = parseOptions({
     enabled: false,
-    delivery: "deterministic",
+    delivery: "observe",
     keepThreshold: 0.2,
     toolResultPreviewChars: 250,
     maxStateTokens: 23000,
@@ -65,13 +65,12 @@ test("0.1.0 options default to guided-native on OpenCode latest", () => {
     maxConcurrentRequests: 1,
   })
   assert.equal(parsed.enabled, false)
-  assert.equal(parsed.delivery, "deterministic")
+  assert.equal(parsed.delivery, "observe")
   assert.equal(parsed.keepThreshold, 0.2)
   assert.equal(parsed.toolResultPreviewChars, 250)
   assert.equal(parsed.maxConcurrentRequests, 1)
   assert.equal(parsed.maxRequestTokens, 30000)
   assert.equal(parseOptions({ maxRequestTokens: 60000 }).maxRequestTokens, DEFAULT_OPTIONS.maxRequestTokens)
-  assert.equal(parseOptions({ delivery: "observe" }).delivery, "observe")
   assert.equal(parseOptions({ delivery: "observe" }).delivery, "observe")
   assert.equal(parseOptions({ delivery: "invalid" }).delivery, "guided-native")
 })
