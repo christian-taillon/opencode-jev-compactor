@@ -246,30 +246,67 @@ test("pinning keeps first, newest user, and recent messages", async () => {
   assert.equal(transcript.messages.find((m) => m.id === "m2").pinned, false)
 })
 
-test("normalizer accepts exact OpenCode 2.0.7 Message tool and media parts", () => {
+test("normalizer accepts current OpenCode message and tool-part shapes", () => {
   const raw = [
-    { id: "u1", role: "user", content: [
-      { type: "text", text: "Fix /tmp/project/build.ts" },
-      { type: "media", mediaType: "text/plain", filename: "build.ts", data: "embedded-data-must-not-be-retained" },
-    ] },
-    { id: "a1", role: "assistant", content: [
-      { type: "text", text: "Checking the failure." },
-      { type: "reasoning", text: "private chain of thought" },
-      { type: "effort", effort: "high" },
-      { type: "tool-call", id: "call-1", name: "shell", input: { command: "pnpm test" } },
-    ] },
-    { id: "t1", role: "tool", content: [
-      { type: "tool-result", id: "call-1", name: "shell", result: { type: "error", value: "FAIL src/build.test.ts\nexit 1" } },
-    ] },
+    {
+      info: {
+        id: "u1",
+        sessionID: "s1",
+        role: "user",
+        time: { created: 1 },
+        agent: "build",
+        model: { providerID: "openai", modelID: "model" },
+      },
+      parts: [
+        { id: "p1", sessionID: "s1", messageID: "u1", type: "text", text: "Fix /tmp/project/build.ts" },
+        { id: "p2", sessionID: "s1", messageID: "u1", type: "file", mime: "image/png", filename: "build.png", url: "file:///tmp/build.png" },
+      ],
+    },
+    {
+      info: {
+        id: "a1",
+        sessionID: "s1",
+        role: "assistant",
+        time: { created: 2 },
+        parentID: "u1",
+        modelID: "model",
+        providerID: "openai",
+        mode: "build",
+        path: { cwd: "/tmp/project", root: "/tmp/project" },
+        cost: 0,
+        tokens: { input: 1, output: 1, reasoning: 0, cache: { read: 0, write: 0 } },
+      },
+      parts: [
+        { id: "p3", sessionID: "s1", messageID: "a1", type: "text", text: "Checking the failure." },
+        {
+          id: "part-tool-1",
+          sessionID: "s1",
+          messageID: "a1",
+          type: "tool",
+          callID: "call-1",
+          tool: "shell",
+          state: {
+            status: "completed",
+            input: { command: "pnpm test" },
+            output: "PASS",
+            title: "test",
+            metadata: {},
+            time: { start: 3, end: 4 },
+          },
+        },
+      ],
+    },
   ]
-  const transcript = normalizeOpenCodeMessages(raw, 1)
+  const transcript = normalizeOpenCodeMessages(raw, 0)
+  assert.equal(transcript.toolCalls.length, 1)
+  assert.equal(transcript.toolCalls[0].id, "call-1")
   assert.equal(transcript.toolCalls[0].toolName, "shell")
   assert.match(transcript.toolCalls[0].inputText, /pnpm test/)
-  assert.equal(transcript.toolCalls[0].result.text, "FAIL src/build.test.ts\nexit 1")
-  assert.equal(transcript.toolCalls[0].result.isError, true)
-  assert.equal(transcript.attachments[0].descriptor, "media name=build.ts mediaType=text/plain")
-  assert.doesNotMatch(transcript.attachments[0].descriptor, /embedded-data/)
-  assert.doesNotMatch(transcript.textBlocks.map((block) => block.text).join("\n"), /chain of thought|effort/)
+  assert.equal(transcript.toolCalls[0].result.text, "PASS")
+  assert.equal(transcript.toolCalls[0].result.isError, false)
+  assert.equal(transcript.attachments.length, 1)
+  assert.match(transcript.attachments[0].descriptor, /build\.png/)
+  assert.match(transcript.textBlocks.map((block) => block.text).join("\n"), /Checking the failure/)
 })
 
 test("normalizer follows OpenCode ignored-text and errored-assistant semantics", () => {
