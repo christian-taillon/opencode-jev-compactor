@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+## 0.1.0
+
+OpenCode latest integration.
+
+- Migrated from the pinned OpenCode 2.0 preview plugin SDK to the current public OpenCode plugin contract.
+- Use `experimental.session.compacting` and fetch the transcript through `client.session.messages`.
+- Keep Jev as one decision stage and append guidance through the native compaction context array.
+- Retain `observe` mode for decision/cost validation without changing native compaction.
+- Removed unsupported direct-result checkpoint replacement and preview-only RPC/TUI hooks.
+- Removed the runtime dependency on a pinned `@opencode/plugin` version.
+- Persist bounded run history under XDG state and emit structured diagnostics.
+- Updated configuration, containment integration, and testing documentation for `opencode:latest`.
+
+
 ## 0.0.8
 
 Cache-friendly guided native compaction.
