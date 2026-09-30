@@ -13,7 +13,8 @@
     "url": "https://github.com/christian-taillon/opencode-jev-compactor/issues"
   },
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./server": "./src/index.ts"
   },
   "files": [
     "index.ts",
