@@ -80,10 +80,17 @@ export default async function JevCompactionPlugin(
       })
     : undefined
 
-  const persist = async (record: CompactionRunRecord) => {
-    history = appendHistory(history, record, options.historyLimit)
-    await saveRuntimeState({ history })
-    statusLog(instanceId, ctx.directory, options.delivery, record)
+  let persistChain: Promise<void> = Promise.resolve()
+  const persist = (record: CompactionRunRecord): Promise<void> => {
+    const task = persistChain
+      .catch(() => undefined)
+      .then(async () => {
+        history = appendHistory(history, record, options.historyLimit)
+        await saveRuntimeState({ history })
+        statusLog(instanceId, ctx.directory, options.delivery, record)
+      })
+    persistChain = task
+    return task
   }
 
   log({
