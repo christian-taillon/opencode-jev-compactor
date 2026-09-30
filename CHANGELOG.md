@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+## 0.1.0
+
+OpenCode latest stable integration.
+
+- Migrated from the pinned experimental 2.0.14 server-plugin API to OpenCode latest stable's public `experimental.session.compacting` hook.
+- Removed the runtime `@opencode/plugin` dependency and all exact OpenCode version pins.
+- Fetch the current session through the OpenCode SDK client supplied to the plugin, then run the existing one-stage Jev decision engine.
+- Deliver `guided-native` decisions through `output.context`, which OpenCode appends after its default continuation-summary prompt.
+- Retained `observe` mode, which runs Jev without modifying the native compaction prompt.
+- Removed active `deterministic` delivery because OpenCode latest stable does not expose a supported plugin result override for skipping the native compaction model.
+- Removed the experimental v2 RPC/TUI status surface and `jev_compare` tool. Current diagnostics use OpenCode structured logging via `client.app.log`.
+- Updated normalization for current stable `ToolPart.callID`, `ToolPart.tool`, and tool-state shapes.
+- Kept deterministic tool safety policy, pruning-capacity preflight, secret redaction, bounded batching, and fail-open native fallback.
+- Updated configuration examples to current stable `plugin: [[spec, options]]` syntax.
+- Updated local testing and containment documentation for a single OpenCode latest runtime.
+
+
 ## 0.0.8
 
 Cache-friendly guided native compaction.
