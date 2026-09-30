@@ -939,7 +939,7 @@ test("same state and Jev answers produce identical decisions", async () => {
 
 test("history exposes semantic metrics and bounded per-tool diagnostics", () => {
   const stats = {
-    pluginVersion: "0.0.8",
+    pluginVersion: "0.1.0",
     delivery: "guided-native",
     sessionID: "ses_test",
     originalEstimatedTokens: 100000,
@@ -977,7 +977,7 @@ test("history exposes semantic metrics and bounded per-tool diagnostics", () => 
     redactions: 0,
   }
   const record = makeRunRecord("ok", null, stats, "2026-01-02T00:00:00Z")
-  assert.match(formatRun(record), /historical plugin 0\.0\.8; delivery guided-native/)
+  assert.match(formatRun(record), /historical plugin 0\.1\.0; delivery guided-native/)
   assert.match(formatRun(record), /deterministic candidate 20,000 tokens; native guidance 900 chars \/ 2 item\(s\)/)
   assert.match(formatRun(record), /semantic payload 100,000 -> 30,000 chars; removable by Jev policy 70\.0%/)
   assert.match(formatRun(record), /max prunable 80,000 chars \/ 80\.0% across 2 tool\(s\)/)
