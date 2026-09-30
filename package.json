@@ -1,7 +1,7 @@
 {
   "name": "opencode-jev-compaction",
-  "version": "0.0.8",
-  "description": "Cache-friendly OpenCode v2 compaction guidance using TypeSafe Jev structured decisions.",
+  "version": "0.1.0",
+  "description": "Jev-guided native compaction for OpenCode latest.",
   "type": "module",
   "license": "MIT",
   "repository": {
@@ -13,14 +13,10 @@
     "url": "https://github.com/christian-taillon/opencode-jev-compactor/issues"
   },
   "exports": {
-    ".": "./src/index.ts",
-    "./rpc": "./src/rpc.ts",
-    "./tui": "./src/tui.ts"
+    ".": "./src/index.ts"
   },
   "files": [
     "index.ts",
-    "tui.ts",
-    "rpc.ts",
     "src",
     "example",
     "docs",
@@ -30,19 +26,15 @@
   ],
   "keywords": [
     "opencode",
-    "opencode-v2",
     "typesafe",
     "jev",
     "compaction",
-    "checkpoint"
+    "context"
   ],
   "engines": {
     "node": ">=20"
   },
   "packageManager": "pnpm@10.23.0",
-  "dependencies": {
-    "@opencode/plugin": "2.0.14"
-  },
   "devDependencies": {
     "typescript": "^5.8.3",
     "@types/node": "^22.10.0"
