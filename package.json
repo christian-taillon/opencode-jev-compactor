@@ -13,10 +13,10 @@
     "url": "https://github.com/christian-taillon/opencode-jev-compactor/issues"
   },
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./dist/index.js"
   },
   "files": [
-    "src",
+    "dist",
     "example",
     "docs",
     "README.md",
@@ -39,6 +39,7 @@
     "@types/node": "^22.10.0"
   },
   "scripts": {
+    "build": "rm -rf dist && tsc -p tsconfig.build.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "rm -rf .test-dist && tsc -p tsconfig.test.json && node --test tests/*.test.mjs"
   }
