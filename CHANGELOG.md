@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+## 0.1.0
+
+OpenCode current-stable integration.
+
+- Migrated from the retired OpenCode 2 preview server-plugin API to current OpenCode's documented `experimental.session.compacting` hook.
+- Read the live transcript through `client.session.messages` and inject Jev guidance through `output.context`.
+- Removed the runtime dependency and version pin on `@opencode/plugin`; the plugin now follows OpenCode's stable legacy plugin-function surface.
+- Removed the old `deterministic` delivery path because current stable compaction exposes prompt/context customization, not replacement of the completed compaction result.
+- Retained `guided-native` and `observe`; Jev remains one decision stage.
+- Removed the OpenCode 2 preview RPC/TUI adapter and its `/jev-status`, `/jev-toggle`, and `/jev-reset` commands.
+- Structured logs now provide the runtime diagnostics used during local validation.
+- Updated installation/configuration examples to current OpenCode's singular `plugin` key and local `file://` package form.
+- Updated the benchmark to compare native OpenCode, Jev observe, and Jev guided-native.
+- Preserved deterministic tool safety policy, semantic capacity preflight, state fitting, secret redaction, and transport hardening.
+
+
 ## 0.0.8
 
 Cache-friendly guided native compaction.
